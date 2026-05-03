@@ -2,11 +2,12 @@
  * HEIC → JPEG 변환 (클라이언트 전용).
  *
  * iPhone 카메라 사진은 기본 HEIC 포맷이고 Anthropic Vision은 이를 지원하지 않는다.
- * `heic2any`는 번들이 무거우므로 동적 import로 코드 스플리팅한다.
+ * `heic-to`는 libheif-js WASM 기반으로 iPhone의 최신 HEIC 변형(HEVC multi-frame, HDR 등)
+ * 까지 폭넓게 지원한다. 번들이 크므로 동적 import로 코드 스플리팅한다.
  *
  * Phase 1 결정: 변환은 클라이언트에서 수행 → Vercel 서버리스 메모리 한도 보호.
- * Streamlit 원본은 서버측 Pillow + pillow_heif로 처리했지만, 서버리스 콜드스타트와
- * 메모리 비용을 고려해 책임을 클라이언트로 옮긴다.
+ * (이전에 사용하던 heic2any는 ERR_LIBHEIF format not supported로 실패하는
+ *  케이스가 많아 heic-to로 교체했다.)
  */
 
 const HEIC_EXT_RE = /\.heic$|\.heif$/i;
@@ -22,17 +23,16 @@ export async function convertHeicToJpeg(file: File): Promise<File> {
   if (!isHeic(file)) return file;
 
   try {
-    const heic2any = (await import("heic2any")).default;
-    const result = await heic2any({
+    const { heicTo } = await import("heic-to");
+    const jpegBlob = await heicTo({
       blob: file,
-      toType: "image/jpeg",
+      type: "image/jpeg",
       quality: 0.9,
     });
-    const jpegBlob = Array.isArray(result) ? result[0] : result;
     const newName = file.name.replace(HEIC_EXT_RE, ".jpg");
     return new File([jpegBlob], newName, { type: "image/jpeg" });
   } catch (err: unknown) {
-    // heic2any는 실패 시 {code, message} plain object를 throw → Error로 정규화
+    // 일부 라이브러리는 plain object를 throw → Error로 정규화
     const detail = extractMessage(err);
     throw new Error(
       `HEIC 사진 변환에 실패했습니다 (${detail}). ` +
