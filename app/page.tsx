@@ -1,16 +1,13 @@
 "use client";
 
 /**
- * KAI JUNG HAIR · Style Assistance — Phase 2
+ * TEAM COCONUT · Style Assistance
  *
- * Phase 1에서 분석 흐름이 끝났고, Phase 2에서는 분석 응답의 `search_keywords`로
- * 자동 체이닝하여 레퍼런스 갤러리(`/api/references`)를 표시한다.
- *
+ * 분석 응답의 `search_keywords`로 자동 체이닝하여 레퍼런스 갤러리(`/api/references`)를
+ * 표시한다.
  *  - 분석 성공 직후 곧바로 갤러리 fetch 시작 (사용자 추가 클릭 없이)
  *  - 결과 영역은 ANALYSIS / KEYWORDS / REFERENCES 3개 탭으로 구성
  *  - 갤러리 로딩 중에는 5개 스켈레톤 표시
- *
- * 디자인 폴리싱(Cormorant Garamond, 그라디언트 헤더, 펄스 등)은 Phase 3.
  */
 import { useMemo, useState, useTransition } from "react";
 
@@ -174,18 +171,24 @@ export default function Home() {
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
-      <header className="space-y-2">
-        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">
-          KAI JUNG HAIR · Style Assistance
-        </p>
-        <h1 className="text-2xl font-semibold sm:text-3xl">
-          AI 헤어스타일 분석 어시스턴트
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          정면 · 측면 · 뒷면 사진 중 가능한 만큼 업로드해 주세요. 강남 KAI JUNG HAIR 원장님의 시선으로 분석해 드립니다.
-          <br />
-          Powered by TEAM COCONUT
-        </p>
+      <header className="flex flex-col items-center gap-4 text-center">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/team-coconut-logo.jpeg"
+          alt="TEAM COCONUT"
+          className="h-32 w-auto sm:h-40"
+        />
+        <div className="space-y-2">
+          <p className="text-[10px] uppercase tracking-[0.32em] text-muted-foreground">
+            AI / AX Driven · Product Innovation · Design
+          </p>
+          <h1 className="text-2xl font-semibold sm:text-3xl">
+            AI 헤어스타일 분석 어시스턴트
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            정면 · 측면 · 뒷면 사진 중 가능한 만큼 업로드해 주세요. 20년 경력 베테랑 원장의 시선으로 분석해 드립니다.
+          </p>
+        </div>
       </header>
 
       <Card>

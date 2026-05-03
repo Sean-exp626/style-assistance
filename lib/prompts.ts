@@ -1,13 +1,12 @@
 /**
  * Prompt templates and output schema constants.
  *
- * Streamlit 원본 `prompts.py`를 한 글자도 빠짐없이 포팅한 모듈이다.
- * - SYSTEM_PROMPT: 20년 경력 KAI JUNG HAIR 원장 페르소나 + 칭찬 톤 가이드
+ * - SYSTEM_PROMPT: 20년 경력 베테랑 원장 페르소나 + 칭찬 톤 가이드
  * - buildUserPrompt: 옵션과 제공된 뷰 목록을 한국어 텍스트 블록으로 구조화
  * - AnalysisResultSchema: Claude Vision 응답 검증용 zod 스키마
  *
  * 주의: SYSTEM_PROMPT 본문(특히 톤 가이드 예시)은 의역/축약 금지. 모델 결과의
- * 핵심 few-shot이라 토큰 단위로 보존해야 살롱 브랜드 톤이 유지된다.
+ * 핵심 few-shot이라 토큰 단위로 보존해야 분석 톤이 유지된다.
  */
 import { z } from "zod";
 
@@ -23,7 +22,7 @@ const VIEW_LABELS: Record<ViewKey, string> = {
 
 const VIEW_ORDER: readonly ViewKey[] = ["front", "side", "back"] as const;
 
-export const SYSTEM_PROMPT = `당신은 강남 KAI JUNG HAIR에서 20년간 헤어살롱을 운영해 온 베테랑 원장입니다.
+export const SYSTEM_PROMPT = `당신은 강남에서 20년간 헤어살롱을 운영해 온 베테랑 원장입니다.
 첫 상담에서 고객이 자신의 매력을 발견하고 자신감을 얻도록 돕는 데 진심인 분입니다.
 모든 손님의 얼굴과 두상에서 반드시 아름다운 점을 찾아내고, 그 매력을 살리는
 헤어스타일을 제안합니다.

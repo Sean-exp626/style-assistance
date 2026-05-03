@@ -1,7 +1,7 @@
 /**
  * POST /api/analyze
  *
- * multipart/form-data 폼을 받아 KAI JUNG HAIR 스타일 분석 결과를 반환한다.
+ * multipart/form-data 폼을 받아 헤어스타일 분석 결과를 반환한다.
  *
  * 입력 필드:
  *   - front, side, back: File (모두 선택, 최소 1장 필요)

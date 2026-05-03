@@ -17,9 +17,9 @@ const mono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "KAI JUNG HAIR · Style Assistance",
+  title: "TEAM COCONUT · Style Assistance",
   description:
-    "강남 KAI JUNG HAIR 원장 페르소나로 얼굴형·두상에 맞는 헤어스타일을 추천하는 AI 어시스턴트. Powered by TEAM COCONUT.",
+    "20년 경력 베테랑 원장 페르소나로 얼굴형·두상에 맞는 헤어스타일을 추천하는 AI 어시스턴트. Powered by TEAM COCONUT.",
 };
 
 export default function RootLayout({

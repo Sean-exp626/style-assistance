@@ -165,7 +165,7 @@ function getClient(): Anthropic {
 }
 
 /**
- * 사진(최소 1장)과 옵션을 받아 KAI JUNG HAIR 스타일 분석 결과를 반환한다.
+ * 사진(최소 1장)과 옵션을 받아 헤어스타일 분석 결과를 반환한다.
  * 호출 측은 `AnalysisResult`만 받는다 — 모델 ID, max_tokens 등 인프라 세부는 노출하지 않는다.
  */
 export async function analyzeCustomer(
