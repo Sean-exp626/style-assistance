@@ -43,6 +43,30 @@ const EXTRACT_REGEXES: readonly RegExp[] = [
 ] as const;
 
 /**
+ * 봇 차단/캡차 페이지 시그니처. 이 패턴이 HTML에 보이면 og:image를 뽑아도
+ * 의미 없는 캡차/사인인 페이지 이미지일 가능성이 높아 추출을 포기한다.
+ * (호출 측에서도 thum.io 폴백을 건너뛰도록 별도 시그널을 줘야 함)
+ */
+const CHALLENGE_SIGNATURES: readonly RegExp[] = [
+  /Just a moment\.{3}/i,
+  /Checking your browser/i,
+  /Verifying you are human/i,
+  /Sign in to confirm you/i, // YouTube
+  /cf-challenge-running/i, // Cloudflare class
+  /Please complete the security check/i,
+  /are you a robot/i,
+  /Captcha required/i,
+  /__cf_chl_/i, // Cloudflare challenge query/cookie
+] as const;
+
+function looksLikeChallenge(html: string): boolean {
+  for (const re of CHALLENGE_SIGNATURES) {
+    if (re.test(html)) return true;
+  }
+  return false;
+}
+
+/**
  * 상대 URL을 절대 URL로 보정한다.
  *
  * - 이미 절대 URL이면 그대로 반환
@@ -110,12 +134,27 @@ async function readLimited(response: Response): Promise<string> {
 }
 
 /**
- * 페이지 URL에서 대표 이미지를 한 장 추출한다. 실패 시 null.
+ * 추출 결과 — image_url 또는 명시적 차단(challenge) 시그널.
  *
- * 호출 측은 null이면 thum.io 페이지 스크린샷 폴백을 사용해야 한다 — UI에는
- * 항상 이미지가 표시되어야 하는 것이 가장 중요한 UX 원칙이다.
+ * - `{ kind: "ok", url }` 정상 추출
+ * - `{ kind: "challenge" }` 봇 차단/캡차 페이지 → thum.io 폴백도 무의미하므로 호출 측이
+ *   결과에서 아예 제외하도록 한다
+ * - `{ kind: "miss" }` 페이지는 정상이지만 og:image 등을 못 찾음 → thum.io 폴백 시도 가능
  */
-export async function extractImageFromPage(pageUrl: string): Promise<string | null> {
+export type ExtractResult =
+  | { kind: "ok"; url: string }
+  | { kind: "challenge" }
+  | { kind: "miss" };
+
+/**
+ * 페이지 URL에서 대표 이미지를 한 장 추출한다.
+ *
+ * - 정상 추출 → `{kind: "ok", url}`
+ * - 페이지 자체가 봇 차단/캡차 → `{kind: "challenge"}` (thum.io 폴백도 같은 페이지를 찍을 가능성 높아 제외 권장)
+ * - 페이지 정상이지만 메타 이미지 없음 → `{kind: "miss"}` (호출 측에서 thum.io 폴백 사용 가능)
+ * - HTTP/네트워크 실패 → `{kind: "miss"}`
+ */
+export async function extractImageFromPage(pageUrl: string): Promise<ExtractResult> {
   let response: Response;
   try {
     response = await fetch(pageUrl, {
@@ -129,23 +168,32 @@ export async function extractImageFromPage(pageUrl: string): Promise<string | nu
       },
     });
   } catch {
-    return null;
+    return { kind: "miss" };
   }
 
   if (!response.ok) {
     // 본문을 읽지 않더라도 connection 누수를 막기 위해 정리
     response.body?.cancel().catch(() => {});
-    return null;
+    // 403/503은 보통 봇 차단 응답
+    if (response.status === 403 || response.status === 503) {
+      return { kind: "challenge" };
+    }
+    return { kind: "miss" };
   }
 
   const html = await readLimited(response);
-  if (!html) return null;
+  if (!html) return { kind: "miss" };
+
+  // 봇 차단 페이지면 og:image도 의미 없는 캡차 이미지일 가능성 높음
+  if (looksLikeChallenge(html)) {
+    return { kind: "challenge" };
+  }
 
   for (const regex of EXTRACT_REGEXES) {
     const match = html.match(regex);
     if (match && match[1]) {
-      return resolveUrl(pageUrl, match[1]);
+      return { kind: "ok", url: resolveUrl(pageUrl, match[1]) };
     }
   }
-  return null;
+  return { kind: "miss" };
 }

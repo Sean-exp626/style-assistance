@@ -25,6 +25,42 @@ const DEFAULT_NUM_RESULTS = 5;
 const THUMBNAIL_FALLBACK = (url: string): string =>
   `https://image.thum.io/get/width/600/maxAge/12/${url}`;
 
+/**
+ * 봇 차단(YouTube/Cloudflare 등)으로 og:image도 thum.io 스크린샷도
+ * 의미 있는 헤어 사진 대신 "확인 페이지" 스크린샷을 반환하는 도메인.
+ * 결과에서 제외해 갤러리 품질을 유지한다.
+ */
+const BLOCKED_DOMAINS = new Set([
+  "youtube.com",
+  "www.youtube.com",
+  "m.youtube.com",
+  "youtu.be",
+  "namu.wiki",
+  "wikipedia.org",
+  "ko.wikipedia.org",
+  "en.wikipedia.org",
+  "tiktok.com",
+  "www.tiktok.com",
+  "facebook.com",
+  "www.facebook.com",
+  "twitter.com",
+  "x.com",
+]);
+
+/**
+ * 페이지 도메인을 기준으로 결과에 포함시킬지 판단.
+ * www. 접두사 / 모바일 서브도메인 등 변형도 차단 목록에 매칭되도록 한다.
+ */
+function isBlockedDomain(domain: string): boolean {
+  const d = domain.toLowerCase();
+  if (BLOCKED_DOMAINS.has(d)) return true;
+  // 서브도메인 매칭 (예: m.youtube.com → youtube.com)
+  for (const blocked of BLOCKED_DOMAINS) {
+    if (d.endsWith(`.${blocked}`)) return true;
+  }
+  return false;
+}
+
 export interface ReferenceImage {
   /** 페이지 제목 (없으면 "레퍼런스") */
   title: string;
@@ -52,16 +88,30 @@ function getClient(): Anthropic {
   return cachedClient;
 }
 
-/** Streamlit 원본 `_build_search_prompt`를 그대로 포팅한 한국어 프롬프트. */
+/**
+ * 검색 프롬프트 — 헤어 사진 og:image가 잘 잡히는 페이지 위주로 유도.
+ *
+ * - 네이버 블로그 / Pinterest / Instagram 포스트 / 헤어샵 사이트 / 매거진 위주
+ * - YouTube / 위키 / SNS 캡차 페이지는 봇 차단 때문에 의미 없는 이미지가 잡혀 제외
+ */
 function buildSearchPrompt(keywords: string[], numResults: number): string {
   const keywordBlock = keywords.map((kw) => `"${kw}"`).join(", ");
-  const minHits = Math.max(numResults, 8);
+  const minHits = Math.max(numResults * 2, 10);
   return (
-    "다음 헤어스타일 키워드로 한국 사이트(네이버 블로그, 인스타그램, 핀터레스트, " +
-    "헤어샵 사이트, 패션 매거진 등)에서 레퍼런스 사진이 들어 있는 페이지를 찾아 주세요. " +
-    `키워드: ${keywordBlock}. ` +
-    `web_search 도구를 사용해 최소 ${minHits}건 이상의 결과를 모아 주세요. ` +
-    "검색 결과 URL이 다양한 출처에서 골고루 나오도록 합니다."
+    "다음 헤어스타일 키워드로 **헤어 사진이 본문에 직접 박혀 있는 한국 페이지**를 찾아 주세요.\n\n" +
+    `키워드: ${keywordBlock}\n\n` +
+    "우선순위가 높은 출처:\n" +
+    "- 네이버 블로그 (blog.naver.com) — 헤어 시술 후기 포스트\n" +
+    "- Pinterest (pinterest.com / kr.pinterest.com) — 헤어 핀\n" +
+    "- 헤어샵/디자이너 사이트 (designersays, juno hair, chahong 등) — 시술 사례 페이지\n" +
+    "- 패션/뷰티 매거진 (allure, elle, vogue, marieclaire 등) — 헤어 기사\n" +
+    "- 티스토리 / 브런치 / 다음 카페 — 헤어 후기 글\n\n" +
+    "**제외할 출처 (반드시 검색 결과에 포함하지 마세요)**:\n" +
+    "- youtube.com / m.youtube.com / youtu.be (봇 차단으로 썸네일 추출 불가)\n" +
+    "- namu.wiki / wikipedia.org (백과사전, 대표 이미지가 헤어 사진 아님)\n" +
+    "- tiktok.com / facebook.com / twitter.com / x.com (캡차 페이지)\n\n" +
+    `web_search 도구로 최소 ${minHits}건 이상의 결과를 모으되, 위 우선 출처에서 골고루 ` +
+    "다양한 도메인에서 가져와 주세요. 영상이 아닌 사진 게시물 위주로."
   );
 }
 
@@ -83,6 +133,7 @@ function collectUrlsFromResponse(
 ): RawCandidate[] {
   const results: RawCandidate[] = [];
   const seen = new Set<string>();
+  let blockedCount = 0;
 
   for (const block of response.content) {
     if (block.type !== "web_search_tool_result") continue;
@@ -99,12 +150,39 @@ function collectUrlsFromResponse(
       const title = rawTitle.length > 0 ? rawTitle : "레퍼런스";
 
       if (!url || seen.has(url)) continue;
+
+      // 봇 차단 도메인은 og:image도 thum.io 스크린샷도 의미 없는 페이지가 잡히므로 제외
+      if (isBlockedDomain(domainOf(url))) {
+        blockedCount += 1;
+        continue;
+      }
+
       seen.add(url);
       results.push({ url, title });
     }
   }
 
+  if (blockedCount > 0) {
+    console.log(`[search] blocked ${blockedCount} candidates (youtube/wiki 등)`);
+  }
   return results;
+}
+
+/**
+ * 추출 결과(ExtractResult)에서 갤러리 카드용 image_url을 결정.
+ *
+ * - kind="ok": og:image URL 그대로 사용
+ * - kind="miss": 페이지는 정상이지만 메타 이미지 없음 → thum.io 페이지 스크린샷 폴백
+ * - kind="challenge": 봇 차단/캡차 페이지 → thum.io도 같은 페이지를 찍을 가능성 높아 null
+ *   호출 측에서 이 후보를 결과에서 제외
+ */
+type ExtractKind = { kind: "ok"; url: string } | { kind: "miss" } | { kind: "challenge" };
+
+function imageUrlFromExtract(pageUrl: string, ex: ExtractKind | undefined): string | null {
+  if (!ex) return THUMBNAIL_FALLBACK(pageUrl); // 미실행 — fallback
+  if (ex.kind === "ok") return ex.url;
+  if (ex.kind === "miss") return THUMBNAIL_FALLBACK(pageUrl);
+  return null; // challenge → 결과에서 제외
 }
 
 /**
@@ -112,10 +190,11 @@ function collectUrlsFromResponse(
  *
  * 1차: 같은 도메인이 이미 들어 있고 final이 절반 이상 찼으면 스킵
  * 2차: 부족하면 도메인 중복 허용으로 채움
+ * 봇 차단(challenge) 후보는 어떤 단계에서도 결과에 포함되지 않는다.
  */
 function pickWithDomainDiversity(
   candidates: RawCandidate[],
-  extracted: Map<string, string | null>,
+  extracted: Map<string, ExtractKind>,
   numResults: number,
 ): ReferenceImage[] {
   const final: ReferenceImage[] = [];
@@ -123,7 +202,8 @@ function pickWithDomainDiversity(
   const halfThreshold = Math.floor(numResults / 2);
 
   for (const cand of candidates) {
-    const imageUrl = extracted.get(cand.url) || THUMBNAIL_FALLBACK(cand.url);
+    const imageUrl = imageUrlFromExtract(cand.url, extracted.get(cand.url));
+    if (imageUrl === null) continue; // challenge — 제외
     const domain = domainOf(cand.url);
 
     if (domain && seenDomains.has(domain) && final.length >= halfThreshold) {
@@ -145,7 +225,8 @@ function pickWithDomainDiversity(
     const already = new Set(final.map((f) => f.url));
     for (const cand of candidates) {
       if (already.has(cand.url)) continue;
-      const imageUrl = extracted.get(cand.url) || THUMBNAIL_FALLBACK(cand.url);
+      const imageUrl = imageUrlFromExtract(cand.url, extracted.get(cand.url));
+      if (imageUrl === null) continue;
       final.push({
         title: cand.title,
         url: cand.url,
@@ -216,13 +297,18 @@ export async function searchReferenceImages(
   const candidates = raw.slice(0, candidatePoolSize);
 
   // 페이지마다 og:image 병렬 페치. 각 호출은 4초 timeout이라 전체 대기 시간이 폭주하지 않는다.
-  const extracted = new Map<string, string | null>();
+  const extracted = new Map<string, ExtractKind>();
   const settled = await Promise.allSettled(
     candidates.map((c) => extractImageFromPage(c.url)),
   );
   candidates.forEach((cand, idx) => {
     const r = settled[idx];
-    extracted.set(cand.url, r.status === "fulfilled" ? r.value : null);
+    if (r.status === "fulfilled") {
+      extracted.set(cand.url, r.value);
+    } else {
+      // 페치 자체 실패는 miss로 취급 → thum.io 폴백 시도
+      extracted.set(cand.url, { kind: "miss" });
+    }
   });
 
   return pickWithDomainDiversity(candidates, extracted, numResults);
