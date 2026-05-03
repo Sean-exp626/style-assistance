@@ -114,7 +114,22 @@ export default function Home() {
         }
         setResult({ result: json.result, providedViews: json.providedViews ?? [] });
       } catch (err) {
-        setError(err instanceof Error ? err.message : "분석 중 알 수 없는 오류가 발생했습니다.");
+        // heic2any 등 일부 라이브러리는 plain object를 throw → 메시지 추출을 강화한다.
+        console.error("Analysis failed:", err);
+        let message = "분석 중 알 수 없는 오류가 발생했습니다.";
+        if (err instanceof Error && err.message) {
+          message = err.message;
+        } else if (err && typeof err === "object") {
+          const obj = err as Record<string, unknown>;
+          if (typeof obj.message === "string" && obj.message.length > 0) {
+            message = obj.message;
+          } else if (typeof obj.code !== "undefined") {
+            message = `오류 코드: ${String(obj.code)}`;
+          }
+        } else if (typeof err === "string" && err.length > 0) {
+          message = err;
+        }
+        setError(message);
       }
     });
   }

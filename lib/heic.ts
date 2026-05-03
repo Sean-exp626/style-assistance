@@ -21,14 +21,33 @@ export function isHeic(file: File): boolean {
 export async function convertHeicToJpeg(file: File): Promise<File> {
   if (!isHeic(file)) return file;
 
-  const heic2any = (await import("heic2any")).default;
-  const result = await heic2any({
-    blob: file,
-    toType: "image/jpeg",
-    quality: 0.9,
-  });
-  const jpegBlob = Array.isArray(result) ? result[0] : result;
+  try {
+    const heic2any = (await import("heic2any")).default;
+    const result = await heic2any({
+      blob: file,
+      toType: "image/jpeg",
+      quality: 0.9,
+    });
+    const jpegBlob = Array.isArray(result) ? result[0] : result;
+    const newName = file.name.replace(HEIC_EXT_RE, ".jpg");
+    return new File([jpegBlob], newName, { type: "image/jpeg" });
+  } catch (err: unknown) {
+    // heic2any는 실패 시 {code, message} plain object를 throw → Error로 정규화
+    const detail = extractMessage(err);
+    throw new Error(
+      `HEIC 사진 변환에 실패했습니다 (${detail}). ` +
+        `iPhone 설정 → 카메라 → 포맷에서 '호환성 우선'으로 바꾼 뒤 다시 촬영하시거나, ` +
+        `사진 앱에서 JPG로 내보낸 파일을 업로드해 주세요.`,
+    );
+  }
+}
 
-  const newName = file.name.replace(HEIC_EXT_RE, ".jpg");
-  return new File([jpegBlob], newName, { type: "image/jpeg" });
+function extractMessage(err: unknown): string {
+  if (err instanceof Error) return err.message || "알 수 없음";
+  if (err && typeof err === "object") {
+    const obj = err as Record<string, unknown>;
+    if (typeof obj.message === "string") return obj.message;
+    if (typeof obj.code !== "undefined") return `code=${String(obj.code)}`;
+  }
+  return "알 수 없음";
 }

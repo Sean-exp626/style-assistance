@@ -24,7 +24,20 @@ export async function resizeImage(
 ): Promise<File> {
   // Safari 일부 환경에서 imageOrientation 옵션이 누락되면 EXIF 회전이 안 되지만,
   // 최신 iOS 16+/Chrome/Edge 모두 지원하므로 Phase 1 기준 OK.
-  const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch (err) {
+    // iOS 구버전이나 일부 환경에서 imageOrientation 옵션 미지원 → 옵션 없이 재시도
+    try {
+      bitmap = await createImageBitmap(file);
+    } catch (innerErr) {
+      const detail = innerErr instanceof Error ? innerErr.message : String(innerErr);
+      throw new Error(
+        `사진을 불러올 수 없습니다 (${detail}). 다른 사진으로 시도해 주세요.`,
+      );
+    }
+  }
   const longEdge = Math.max(bitmap.width, bitmap.height);
   const scale = longEdge > maxLongEdge ? maxLongEdge / longEdge : 1;
 
