@@ -5,22 +5,25 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * TEAM COCONUT — Design Tokens
+ * TEAM COCONUT — Design Tokens (Phase 3 폴리싱)
  *
- * 브랜드 컬러: 코코넛 로고의 틸 그린 + 다크 무드.
- * shadcn 시맨틱 변수에 매핑하여 모든 UI에 일관 적용.
+ * 다크 스튜디오 무드. 완전한 검정(#000) 대신 약간 색감을 가진 #0E1414 베이스.
+ * 브랜드 컬러: 코코넛 로고의 틸 그린 + 은은한 글로우.
  */
 @theme inline {
   /* TEAM COCONUT brand palette */
   --color-tc-bg: #0E1414;
-  --color-tc-surface: #161E1F;
-  --color-tc-surface-2: #1C2627;
-  --color-tc-border: #243031;
+  --color-tc-surface: #131B1C;        /* 카드 베이스 — 배경보다 살짝 밝게 */
+  --color-tc-surface-2: #1A2425;      /* 인라인 인풋, 호버 등 한 단계 더 위 */
+  --color-tc-border: #233030;
+  --color-tc-border-strong: #2E3D3D;
   --color-tc-text: #ECEEED;
-  --color-tc-text-muted: #9AA8A9;
-  --color-tc-accent: #1E8E91; /* 코코넛 로고 틸 */
-  --color-tc-accent-hi: #2BA8AB;
-  --color-tc-accent-fg: #0B1213;
+  --color-tc-text-muted: #8FA0A1;
+  --color-tc-text-soft: #B5C2C2;
+  --color-tc-accent: #1E8E91;         /* 코코넛 로고 틸 (어두운) */
+  --color-tc-accent-hi: #2BA8AB;      /* 밝은 틸 — 그라디언트 끝점 */
+  --color-tc-accent-soft: #1E8E9133;  /* 글로우/링용 20% 알파 */
+  --color-tc-accent-fg: #061010;
   --color-tc-danger: #E26D6D;
 
   /* shadcn token mapping (kept inline for Tailwind v4) */
@@ -43,8 +46,17 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-mono);
+  /*
+   * 폰트 토큰
+   *  - sans: Inter (영문 UI/본문)
+   *  - kr:   Noto Sans KR (한국어)
+   *  - serif: Cormorant Garamond (디스플레이 헤딩 — 브랜드 큰 제목)
+   * 한국어 글리프는 sans 스택에 kr이 포함돼 있어 unicode-range로 자동 분기된다.
+   */
+  --font-sans: var(--font-sans), var(--font-kr), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-kr: var(--font-kr), ui-sans-serif, system-ui, sans-serif;
+  --font-serif: var(--font-serif), "Cormorant Garamond", "Times New Roman", serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --font-heading: var(--font-sans);
 
   --radius-sm: calc(var(--radius) * 0.6);
@@ -55,7 +67,7 @@
 }
 
 /*
- * Dark-only: TEAM COCONUT는 다크 무드 고정. 라이트 테마 변수는 작성하지 않는다.
+ * Dark-only: TEAM COCONUT는 다크 무드 고정.
  */
 :root {
   --background: var(--color-tc-bg);
@@ -76,7 +88,7 @@
   --border: var(--color-tc-border);
   --input: var(--color-tc-border);
   --ring: var(--color-tc-accent-hi);
-  --radius: 0.625rem;
+  --radius: 0.75rem;
 }
 
 html {
@@ -88,7 +100,16 @@ html {
     @apply border-border outline-ring/50;
   }
   body {
-    background: var(--color-tc-bg);
+    /*
+     * 두 개의 radial-gradient로 우상단/좌하단에 매우 옅은 틸 글로우.
+     * 베이스는 #0E1414 — 완전한 검정을 피해 색감을 살짝 부여.
+     * background-attachment: fixed → 스크롤해도 글로우 위치 고정.
+     */
+    background-color: var(--color-tc-bg);
+    background-image:
+      radial-gradient(ellipse 80% 60% at 85% -10%, rgba(43, 168, 171, 0.10), transparent 60%),
+      radial-gradient(ellipse 70% 60% at 10% 110%, rgba(30, 142, 145, 0.08), transparent 60%);
+    background-attachment: fixed;
     color: var(--color-tc-text);
     font-family: var(--font-sans);
     /* 한국어 줄바꿈 규칙 보존 */
@@ -98,4 +119,23 @@ html {
   html {
     @apply font-sans;
   }
+}
+
+/*
+ * 유틸 — 매우 미세한 노이즈 텍스처 (옵션). 필요 시 .tc-grain 클래스로 토글.
+ * 데이터 URL의 SVG가 0.04 알파의 turbulence를 생성한다.
+ */
+.tc-grain {
+  position: relative;
+  isolation: isolate;
+}
+.tc-grain::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.04;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
 }

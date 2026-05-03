@@ -1,23 +1,38 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Cormorant_Garamond, Inter, Noto_Sans_KR } from "next/font/google";
 import "./globals.css";
 
 /*
- * Phase 1: Geist만 임시 사용. Phase 3에서 Cormorant Garamond + Noto Sans KR로 교체.
- * `--font-sans`는 globals.css가 이 변수를 그대로 매핑한다.
+ * Phase 3 — 폰트 시스템.
+ *
+ * - Inter: 영문 본문/UI (Geist 대체, 모던하고 가독성 우수)
+ * - Noto Sans KR: 한국어 본문 (subset 'latin'만 가능 → CSS unicode-range가 자동 분기)
+ * - Cormorant Garamond: 디스플레이 헤딩용 세리프 (브랜드 영역의 큰 제목에서 절제된 사용)
+ *
+ * `display: "swap"`으로 FOIT 방지. variable로 노출해 globals.css의 토큰에 매핑.
  */
-const sans = Geist({
+const sans = Inter({
   variable: "--font-sans",
   subsets: ["latin"],
+  display: "swap",
 });
 
-const mono = Geist_Mono({
-  variable: "--font-mono",
+const kr = Noto_Sans_KR({
+  variable: "--font-kr",
   subsets: ["latin"],
+  weight: ["300", "400", "500", "600", "700"],
+  display: "swap",
+});
+
+const serif = Cormorant_Garamond({
+  variable: "--font-serif",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "TEAM COCONUT · Style Assistance",
+  title: "TEAM COCONUT · Hair Style Assistant",
   description:
     "20년 경력 베테랑 원장 페르소나로 얼굴형·두상에 맞는 헤어스타일을 추천하는 AI 어시스턴트. Powered by TEAM COCONUT.",
 };
@@ -30,7 +45,7 @@ export default function RootLayout({
   return (
     <html
       lang="ko"
-      className={`${sans.variable} ${mono.variable} h-full antialiased`}
+      className={`${sans.variable} ${kr.variable} ${serif.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

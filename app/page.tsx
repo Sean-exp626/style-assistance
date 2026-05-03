@@ -1,37 +1,31 @@
 "use client";
 
 /**
- * TEAM COCONUT · Style Assistance
+ * TEAM COCONUT · Hair Style Assistant
  *
- * 분석 응답의 `search_keywords`로 자동 체이닝하여 레퍼런스 갤러리(`/api/references`)를
- * 표시한다.
- *  - 분석 성공 직후 곧바로 갤러리 fetch 시작 (사용자 추가 클릭 없이)
- *  - 결과 영역은 ANALYSIS / KEYWORDS / REFERENCES 3개 탭으로 구성
- *  - 갤러리 로딩 중에는 5개 스켈레톤 표시
+ * Phase 3 — 디자인 전면 재구성.
+ *
+ * 페이지 구성:
+ *  1) 브랜드 영역(헤더): 인라인 SVG 코코넛 마크 + 워드마크 + 태그라인 + 페이지 타이틀
+ *  2) 상담 카드: 3개 PhotoUploader 그리드 + SegmentedControl(성별) + ChipGroup(기장) + CTA
+ *  3) 결과 영역: 빈 상태 / 로딩 스켈레톤 / 분석 탭 (ANALYSIS / KEYWORDS / REFERENCES)
+ *
+ * 책임 분리:
+ *  - 페이지는 "조립 + 폼 상태 관리"만. 시각 컴포넌트는 모두 외부 파일로 분리.
+ *  - 분석 응답의 `search_keywords`로 자동 체이닝하여 References 탭이 곧바로 채워진다.
  */
-import { useMemo, useState, useTransition } from "react";
 
+import { useMemo, useState, useTransition } from "react";
+import { ArrowRight, Loader2, Quote, Sparkles } from "lucide-react";
+
+import { ChipGroup } from "@/components/chip-group";
+import { CoconutLogo, CoconutWordmark } from "@/components/coconut-logo";
+import { PhotoUploader } from "@/components/photo-uploader";
 import { ReferenceGallery } from "@/components/reference-gallery";
+import { SegmentedControl } from "@/components/segmented-control";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
@@ -45,18 +39,39 @@ import type {
 } from "@/lib/prompts";
 import type { ReferenceImage } from "@/lib/search";
 
+/* -------------------------- 정적 매핑 / 옵션 -------------------------- */
+
 const VIEW_LABELS: Record<ViewKey, string> = {
   front: "정면",
   side: "측면",
   back: "뒷면",
 };
 
+const VIEW_HINTS: Record<ViewKey, string> = {
+  front: "얼굴이 정면을 향한 사진",
+  side: "옆모습이 보이는 사진",
+  back: "뒤통수가 보이는 사진",
+};
+
 const VIEW_KEYS: readonly ViewKey[] = ["front", "side", "back"] as const;
+
+const GENDER_OPTIONS = [
+  { value: "여성" as Gender, label: "여성" },
+  { value: "남성" as Gender, label: "남성" },
+] as const;
+
+const LENGTH_OPTIONS = [
+  { value: "현재 유지" as LengthPreference, label: "현재 유지" },
+  { value: "더 짧게" as LengthPreference, label: "더 짧게" },
+  { value: "더 길게" as LengthPreference, label: "더 길게" },
+] as const;
 
 interface AnalyzeResponse {
   result: AnalysisResult;
   providedViews: ViewKey[];
 }
+
+/* ============================== Page ============================== */
 
 export default function Home() {
   const [files, setFiles] = useState<Partial<Record<ViewKey, File>>>({});
@@ -110,7 +125,7 @@ export default function Home() {
     setReferences(null);
     setIsLoadingRefs(false);
     if (!hasAnyFile) {
-      setError("정면/측면/뒷면 중 최소 한 장의 사진이 필요합니다.");
+      setError("정면 / 측면 / 뒷면 중 최소 한 장의 사진이 필요합니다.");
       return;
     }
 
@@ -123,7 +138,7 @@ export default function Home() {
         for (const view of VIEW_KEYS) {
           const original = files[view];
           if (!original) continue;
-          // HEIC → JPEG → long-edge 1568px 리사이즈 순. 이미 JPEG여도 정규화 차원에서 리사이즈 1회 수행
+          // HEIC → JPEG → long-edge 1568px 리사이즈
           const jpeg = await convertHeicToJpeg(original);
           const resized = await resizeImage(jpeg);
           formData.set(view, resized);
@@ -145,11 +160,9 @@ export default function Home() {
           result: json.result,
           providedViews: json.providedViews ?? [],
         });
-        // 분석 성공 → 즉시 갤러리 페치 시작 (await 하지 않고 fire-and-forget)
-        // 사용자는 ANALYSIS / KEYWORDS 탭을 먼저 보고 REFERENCES 탭으로 넘어가면 됨
+        // 분석 성공 → 갤러리 fire-and-forget
         void fetchReferences(json.result.search_keywords);
       } catch (err) {
-        // heic2any 등 일부 라이브러리는 plain object를 throw → 메시지 추출을 강화한다.
         console.error("Analysis failed:", err);
         let message = "분석 중 알 수 없는 오류가 발생했습니다.";
         if (err instanceof Error && err.message) {
@@ -170,142 +183,253 @@ export default function Home() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-8 px-4 py-10 sm:px-6 sm:py-14">
-      <header className="flex flex-col items-center gap-4 text-center">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src="/team-coconut-logo.jpeg"
-          alt="TEAM COCONUT"
-          className="h-32 w-auto sm:h-40"
+    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-5 pb-24 pt-10 sm:px-8 sm:pt-14 lg:pt-20">
+      <BrandHeader />
+
+      <div className="mt-16 sm:mt-24 lg:mt-28">
+        <ConsultationCard
+          files={files}
+          onPickFile={onPickFile}
+          gender={gender}
+          setGender={setGender}
+          lengthPref={lengthPref}
+          setLengthPref={setLengthPref}
+          isPending={isPending}
+          hasAnyFile={hasAnyFile}
+          onSubmit={onSubmit}
         />
-        <div className="space-y-2">
-          <p className="text-[10px] uppercase tracking-[0.32em] text-muted-foreground">
-            AI / AX Driven · Product Innovation · Design
-          </p>
-          <h1 className="text-2xl font-semibold sm:text-3xl">
-            AI 헤어스타일 분석 어시스턴트
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            정면 · 측면 · 뒷면 사진 중 가능한 만큼 업로드해 주세요. 20년 경력 베테랑 원장의 시선으로 분석해 드립니다.
-          </p>
-        </div>
-      </header>
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">고객 정보 입력</CardTitle>
-          <CardDescription>
-            iPhone HEIC 사진은 자동으로 JPEG로 변환되어 업로드됩니다. (최대 10MB · 한 장 이상)
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form className="space-y-6" onSubmit={onSubmit}>
-            <div className="grid gap-4 sm:grid-cols-3">
-              {VIEW_KEYS.map((view) => (
-                <div key={view} className="space-y-2">
-                  <Label htmlFor={`file-${view}`}>{VIEW_LABELS[view]} 사진</Label>
-                  <input
-                    id={`file-${view}`}
-                    type="file"
-                    accept="image/*,.heic,.heif"
-                    capture="environment"
-                    onChange={(e) =>
-                      onPickFile(view, e.target.files?.[0] ?? null)
-                    }
-                    className="block w-full text-sm text-foreground file:mr-3 file:rounded-md file:border-0 file:bg-secondary file:px-3 file:py-1.5 file:text-sm file:text-secondary-foreground hover:file:bg-secondary/80"
-                  />
-                  {files[view] ? (
-                    <p className="truncate text-xs text-muted-foreground" title={files[view]?.name}>
-                      {files[view]?.name}
-                    </p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground/70">선택 안 됨</p>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            <Separator />
-
-            <div className="grid gap-6 sm:grid-cols-2">
-              <fieldset className="space-y-3">
-                <legend className="text-sm font-medium">성별</legend>
-                <RadioGroup
-                  value={gender}
-                  onValueChange={(v) => setGender(v as Gender)}
-                  className="flex gap-6"
-                >
-                  <div className="flex items-center gap-2">
-                    <RadioGroupItem id="g-female" value="여성" />
-                    <Label htmlFor="g-female" className="cursor-pointer">여성</Label>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <RadioGroupItem id="g-male" value="남성" />
-                    <Label htmlFor="g-male" className="cursor-pointer">남성</Label>
-                  </div>
-                </RadioGroup>
-              </fieldset>
-
-              <div className="space-y-3">
-                <Label htmlFor="length">기장 변화 선호</Label>
-                <Select
-                  value={lengthPref}
-                  onValueChange={(v) => setLengthPref(v as LengthPreference)}
-                >
-                  <SelectTrigger id="length" className="w-full">
-                    <SelectValue placeholder="기장 변화 선호" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="현재 유지">현재 유지</SelectItem>
-                    <SelectItem value="더 짧게">더 짧게</SelectItem>
-                    <SelectItem value="더 길게">더 길게</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <Button
-              type="submit"
-              size="lg"
-              className="w-full"
-              disabled={isPending || !hasAnyFile}
-            >
-              {isPending ? "분석 중…" : "분석 시작"}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+      </div>
 
       {error ? (
-        <Alert variant="destructive">
-          <AlertTitle>분석에 실패했습니다</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+        <div className="mt-8">
+          <Alert variant="destructive">
+            <AlertTitle>분석에 실패했습니다</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        </div>
       ) : null}
 
-      {isPending ? <ResultSkeleton /> : null}
+      <div className="mt-12">
+        {isPending ? (
+          <ResultLoading />
+        ) : result ? (
+          <ResultTabs
+            result={result.result}
+            providedViews={result.providedViews}
+            references={references}
+            isLoadingRefs={isLoadingRefs}
+          />
+        ) : !error ? (
+          <EmptyState />
+        ) : null}
+      </div>
 
-      {result && !isPending ? (
-        <ResultTabs
-          result={result.result}
-          providedViews={result.providedViews}
-          references={references}
-          isLoadingRefs={isLoadingRefs}
-        />
-      ) : null}
-    </div>
+      <Footer />
+    </main>
   );
 }
 
-function ResultSkeleton() {
+/* ============================ Sub-views ============================ */
+
+function BrandHeader() {
   return (
-    <div className="space-y-3">
-      <Skeleton className="h-6 w-1/3" />
-      <Skeleton className="h-32 w-full" />
-      <Skeleton className="h-24 w-full" />
+    <header className="flex flex-col items-center text-center animate-in fade-in duration-700">
+      <CoconutLogo className="h-16 w-16 sm:h-20 sm:w-20" />
+
+      <div className="mt-5 flex items-center gap-3">
+        <span className="h-px w-6 bg-border" />
+        <CoconutWordmark className="text-[12px] sm:text-[14px]" />
+        <span className="h-px w-6 bg-border" />
+      </div>
+
+      <p className="mt-3 text-[10px] uppercase tracking-[0.32em] text-muted-foreground sm:text-[11px]">
+        AI / AX Driven · Product Innovation · Design
+      </p>
+
+      <h1 className="mt-10 font-serif text-4xl font-medium leading-[1.05] tracking-tight text-foreground sm:text-5xl lg:text-6xl">
+        Hair Style Assistant
+      </h1>
+      <p className="mt-3 max-w-xl text-sm text-muted-foreground sm:text-[15px]">
+        20년 경력 베테랑 원장의 시선으로, 당신의 얼굴형과 두상에 가장 잘 어울리는 스타일을 찾아 드립니다.
+      </p>
+    </header>
+  );
+}
+
+interface ConsultationCardProps {
+  files: Partial<Record<ViewKey, File>>;
+  onPickFile: (view: ViewKey, file: File | null) => void;
+  gender: Gender;
+  setGender: (g: Gender) => void;
+  lengthPref: LengthPreference;
+  setLengthPref: (l: LengthPreference) => void;
+  isPending: boolean;
+  hasAnyFile: boolean;
+  onSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
+}
+
+function ConsultationCard({
+  files,
+  onPickFile,
+  gender,
+  setGender,
+  lengthPref,
+  setLengthPref,
+  isPending,
+  hasAnyFile,
+  onSubmit,
+}: ConsultationCardProps) {
+  return (
+    <section className="animate-in fade-in duration-700">
+      <div
+        className={cnCard(
+          "relative overflow-hidden rounded-2xl border border-border/70 bg-card/80 p-6 shadow-[0_30px_80px_-40px_rgba(0,0,0,0.7)] backdrop-blur-sm sm:p-8 lg:p-10",
+        )}
+      >
+        {/* 카드 상단 - 미세한 틸 라인 */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[color:var(--color-tc-accent)]/40 to-transparent" />
+
+        <form className="space-y-10" onSubmit={onSubmit}>
+          {/* 사진 업로더 그리드 */}
+          <div className="space-y-4">
+            <SectionLabel title="Photos" hint="최소 1장 · iPhone HEIC 자동 변환" />
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {VIEW_KEYS.map((view) => (
+                <PhotoUploader
+                  key={view}
+                  label={VIEW_LABELS[view]}
+                  hint={VIEW_HINTS[view]}
+                  file={files[view] ?? null}
+                  onChange={(f) => onPickFile(view, f)}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* 옵션 영역 */}
+          <div className="grid gap-8 sm:grid-cols-2">
+            <div className="space-y-3">
+              <SectionLabel title="Sex" />
+              <SegmentedControl<Gender>
+                ariaLabel="성별 선택"
+                value={gender}
+                options={GENDER_OPTIONS}
+                onChange={setGender}
+              />
+            </div>
+
+            <div className="space-y-3">
+              <SectionLabel title="Length" />
+              <ChipGroup<LengthPreference>
+                ariaLabel="기장 변화 선호"
+                value={lengthPref}
+                options={LENGTH_OPTIONS}
+                onChange={setLengthPref}
+              />
+            </div>
+          </div>
+
+          {/* CTA */}
+          <div className="pt-2">
+            <button
+              type="submit"
+              disabled={isPending || !hasAnyFile}
+              className={[
+                "group inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl",
+                "bg-gradient-to-r from-[color:var(--color-tc-accent)] to-[color:var(--color-tc-accent-hi)]",
+                "text-[14px] font-semibold uppercase tracking-[0.18em] text-[color:var(--color-tc-accent-fg)]",
+                "shadow-[0_10px_30px_-12px_var(--color-tc-accent)] transition-all",
+                "hover:-translate-y-px hover:shadow-[0_14px_36px_-12px_var(--color-tc-accent-hi)]",
+                "active:translate-y-0",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[color:var(--color-tc-accent-hi)]",
+                "disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow-[0_10px_30px_-12px_var(--color-tc-accent)]",
+              ].join(" ")}
+            >
+              {isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" strokeWidth={2.5} />
+                  분석 중…
+                </>
+              ) : (
+                <>
+                  Begin Analysis
+                  <ArrowRight
+                    className="h-4 w-4 transition-transform group-hover:translate-x-0.5"
+                    strokeWidth={2.5}
+                  />
+                </>
+              )}
+            </button>
+            {!hasAnyFile ? (
+              <p className="mt-3 text-center text-[11px] text-muted-foreground">
+                정면 · 측면 · 뒷면 중 최소 한 장의 사진을 업로드해 주세요
+              </p>
+            ) : null}
+          </div>
+        </form>
+      </div>
+    </section>
+  );
+}
+
+function SectionLabel({ title, hint }: { title: string; hint?: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-[10px] font-semibold uppercase tracking-[0.32em] text-[color:var(--color-tc-accent-hi)]">
+        {title}
+      </span>
+      {hint ? (
+        <span className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+          {hint}
+        </span>
+      ) : null}
     </div>
   );
 }
+
+/* ----------------------- Empty / Loading -------------------------- */
+
+function EmptyState() {
+  return (
+    <div className="flex flex-col items-center gap-4 rounded-2xl border border-dashed border-border/60 px-6 py-14 text-center animate-in fade-in duration-700">
+      <CoconutLogo className="h-10 w-10 opacity-40" />
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.32em] text-muted-foreground">
+          Awaiting Consultation
+        </p>
+        <p className="mt-2 text-sm text-muted-foreground/80">
+          사진과 옵션을 입력한 뒤 Begin Analysis를 눌러 주세요.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ResultLoading() {
+  return (
+    <section className="space-y-6 animate-in fade-in duration-500">
+      <div className="flex items-center gap-3">
+        <Sparkles
+          className="h-4 w-4 text-[color:var(--color-tc-accent-hi)] animate-pulse"
+          strokeWidth={2}
+        />
+        <p className="text-[11px] font-semibold uppercase tracking-[0.32em] text-[color:var(--color-tc-accent-hi)]">
+          AI Analyzing
+        </p>
+        <span className="text-[11px] text-muted-foreground">원장님이 사진을 살펴보고 있습니다…</span>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-3">
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-24 rounded-xl" />
+        ))}
+      </div>
+      <Skeleton className="h-40 w-full rounded-xl" />
+      <Skeleton className="h-28 w-full rounded-xl" />
+    </section>
+  );
+}
+
+/* ============================= Result ============================= */
 
 function ResultTabs({
   result,
@@ -319,47 +443,45 @@ function ResultTabs({
   isLoadingRefs: boolean;
 }) {
   return (
-    <section className="space-y-4">
+    <section className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="text-xl font-semibold">분석 결과</h2>
-        <p className="text-xs text-muted-foreground">
-          분석된 뷰: {providedViews.length > 0
-            ? providedViews.map((v) => VIEW_LABELS[v]).join(" · ")
+        <h2 className="font-serif text-2xl font-medium tracking-tight sm:text-3xl">
+          Consultation Result
+        </h2>
+        <p className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground">
+          Analyzed Views ·{" "}
+          {providedViews.length > 0
+            ? providedViews.map((v) => VIEW_LABELS[v]).join(" / ")
             : "—"}
         </p>
       </header>
 
       <Tabs defaultValue="analysis">
-        <TabsList className="w-full">
-          <TabsTrigger
-            value="analysis"
-            className="text-xs uppercase tracking-[0.16em]"
-          >
-            Analysis
-          </TabsTrigger>
-          <TabsTrigger
-            value="keywords"
-            className="text-xs uppercase tracking-[0.16em]"
-          >
-            Keywords
-          </TabsTrigger>
-          <TabsTrigger
-            value="references"
-            className="text-xs uppercase tracking-[0.16em]"
-          >
-            References
-          </TabsTrigger>
+        <TabsList variant="line" className="gap-6 border-b border-border/70 px-0">
+          {[
+            { v: "analysis", l: "Analysis" },
+            { v: "keywords", l: "Keywords" },
+            { v: "references", l: "References" },
+          ].map((t) => (
+            <TabsTrigger
+              key={t.v}
+              value={t.v}
+              className="px-0 text-[11px] font-semibold uppercase tracking-[0.28em] text-muted-foreground data-active:text-[color:var(--color-tc-accent-hi)]"
+            >
+              {t.l}
+            </TabsTrigger>
+          ))}
         </TabsList>
 
-        <TabsContent value="analysis" className="mt-4 space-y-4">
+        <TabsContent value="analysis" className="mt-8">
           <AnalysisPanel result={result} />
         </TabsContent>
 
-        <TabsContent value="keywords" className="mt-4">
+        <TabsContent value="keywords" className="mt-8">
           <KeywordsPanel keywords={result.search_keywords} />
         </TabsContent>
 
-        <TabsContent value="references" className="mt-4">
+        <TabsContent value="references" className="mt-8">
           <ReferenceGallery refs={references} isLoading={isLoadingRefs} />
         </TabsContent>
       </Tabs>
@@ -369,52 +491,67 @@ function ResultTabs({
 
 function AnalysisPanel({ result }: { result: AnalysisResult }) {
   return (
-    <div className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>얼굴형</CardDescription>
-            <CardTitle className="text-base">{result.face_shape}</CardTitle>
-          </CardHeader>
-        </Card>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>두상</CardDescription>
-            <CardTitle className="text-base">{result.head_shape}</CardTitle>
-          </CardHeader>
-        </Card>
+    <div className="space-y-6">
+      {/* 메트릭 카드 3개 */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <MetricCard label="Face Shape" value={result.face_shape} />
+        <MetricCard label="Head Profile" value={result.head_shape} />
+        <MetricCard
+          label="Length"
+          value={result.recommended_style.length}
+        />
       </div>
 
-      <Card>
-        <CardHeader className="pb-2">
-          <CardDescription>추천 스타일</CardDescription>
-          <CardTitle className="text-lg">
-            {result.recommended_style.name}
-          </CardTitle>
-          <p className="text-sm text-muted-foreground">
-            기장: {result.recommended_style.length}
-          </p>
-        </CardHeader>
-        <CardContent>
-          <p className="mb-2 text-sm font-medium">핵심 포인트</p>
-          <ul className="list-disc space-y-1 pl-5 text-sm">
+      {/* 추천 스타일 */}
+      <Card className="overflow-hidden">
+        <CardContent className="space-y-5 p-6 sm:p-8">
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] font-semibold uppercase tracking-[0.32em] text-[color:var(--color-tc-accent-hi)]">
+              Recommended Style
+            </span>
+            <h3 className="font-serif text-2xl font-semibold tracking-tight sm:text-3xl">
+              {result.recommended_style.name}
+            </h3>
+          </div>
+
+          <ul className="space-y-2.5">
             {result.recommended_style.key_features.map((feature, i) => (
-              <li key={i}>{feature}</li>
+              <li key={i} className="flex items-start gap-3 text-[14px] leading-relaxed">
+                <span
+                  aria-hidden
+                  className="mt-[9px] h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--color-tc-accent-hi)] shadow-[0_0_10px_var(--color-tc-accent)]"
+                />
+                <span className="text-foreground/90">{feature}</span>
+              </li>
             ))}
           </ul>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="pb-2">
-          <CardDescription>원장님 한 마디</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="whitespace-pre-line text-sm leading-relaxed">
-            {result.professional_analysis}
-          </p>
-        </CardContent>
-      </Card>
+      {/* 원장님 한 마디 — 좌측 틸 보더 인용 스타일 */}
+      <div className="relative overflow-hidden rounded-xl border border-border/80 bg-[color:var(--color-tc-surface)]/70 p-6 sm:p-7">
+        <div className="absolute inset-y-0 left-0 w-[3px] bg-gradient-to-b from-[color:var(--color-tc-accent-hi)] to-[color:var(--color-tc-accent)]" />
+        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.32em] text-[color:var(--color-tc-accent-hi)]">
+          <Quote className="h-3 w-3" strokeWidth={2.2} />
+          Director&apos;s Note
+        </div>
+        <p className="mt-4 whitespace-pre-line text-[14.5px] leading-[1.85] text-foreground/90">
+          {result.professional_analysis}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-border/80 bg-card p-4">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.32em] text-muted-foreground">
+        {label}
+      </p>
+      <p className="mt-2 text-[15px] font-medium leading-snug text-foreground">
+        {value}
+      </p>
     </div>
   );
 }
@@ -422,16 +559,22 @@ function AnalysisPanel({ result }: { result: AnalysisResult }) {
 function KeywordsPanel({ keywords }: { keywords: string[] }) {
   return (
     <Card>
-      <CardHeader className="pb-2">
-        <CardDescription>레퍼런스 검색 키워드</CardDescription>
-        <p className="text-xs text-muted-foreground">
-          References 탭의 갤러리는 이 키워드들로 자동 생성됩니다.
-        </p>
-      </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4 p-6 sm:p-7">
+        <div>
+          <p className="text-[10px] font-semibold uppercase tracking-[0.32em] text-[color:var(--color-tc-accent-hi)]">
+            Search Keywords
+          </p>
+          <p className="mt-2 text-[13px] text-muted-foreground">
+            References 탭의 갤러리는 이 키워드들로 자동 생성됩니다.
+          </p>
+        </div>
         <div className="flex flex-wrap gap-2">
           {keywords.map((kw) => (
-            <Badge key={kw} variant="secondary">
+            <Badge
+              key={kw}
+              variant="outline"
+              className="h-7 border-border/80 bg-[color:var(--color-tc-surface-2)] px-3 text-[12px] font-normal"
+            >
               {kw}
             </Badge>
           ))}
@@ -439,4 +582,28 @@ function KeywordsPanel({ keywords }: { keywords: string[] }) {
       </CardContent>
     </Card>
   );
+}
+
+function Footer() {
+  return (
+    <footer className="mt-24 flex flex-col items-center gap-2 text-center">
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.32em] text-muted-foreground/70">
+        <span className="h-px w-6 bg-border" />
+        <span>Powered by TEAM COCONUT</span>
+        <span className="h-px w-6 bg-border" />
+      </div>
+      <p className="text-[11px] text-muted-foreground/60">
+        AI / AX Driven · Product Innovation · Design
+      </p>
+    </footer>
+  );
+}
+
+/* ----------------------------- helpers ----------------------------- */
+
+// Card 베이스에 추가 클래스를 합치기 위한 박막 헬퍼.
+// shadcn `Card`를 그대로 쓰면 padding/radius가 고정되는데,
+// 상담 카드만 더 큰 radius/패딩이 필요해 native div에 같은 토큰을 직접 적용한다.
+function cnCard(extra: string) {
+  return extra;
 }
