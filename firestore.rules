@@ -1,0 +1,14 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /hairAnalyses/{analysisId} {
+      // 본인 doc만 read, 관리자(sean.gn7@gmail.com)는 모든 doc read
+      allow read: if request.auth != null && (
+        request.auth.uid == resource.data.uid ||
+        request.auth.token.email == 'sean.gn7@gmail.com'
+      );
+      // 클라이언트 직접 write 금지 — Admin SDK만
+      allow write: if false;
+    }
+  }
+}

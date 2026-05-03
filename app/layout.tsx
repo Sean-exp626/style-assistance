@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { Cormorant_Garamond, Inter, Noto_Sans_KR } from "next/font/google";
 import "./globals.css";
 
+import { AuthNav } from "@/components/auth/auth-nav";
+
 /*
  * Phase 3 — 폰트 시스템.
  *
@@ -47,7 +49,10 @@ export default function RootLayout({
       lang="ko"
       className={`${sans.variable} ${kr.variable} ${serif.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="relative min-h-full flex flex-col">
+        <AuthNav />
+        {children}
+      </body>
     </html>
   );
 }
