@@ -246,7 +246,7 @@ function BrandHeader() {
         AI / AX Driven · Product Innovation · Design
       </p>
 
-      <h1 className="mt-10 font-serif text-4xl font-medium leading-[1.05] tracking-tight text-foreground sm:text-5xl lg:text-6xl">
+      <h1 className="mt-10 font-sans text-[40px] font-bold leading-[0.98] tracking-[-0.035em] text-foreground sm:text-[56px] lg:text-[68px]">
         Hair Style Assistant
       </h1>
       <p className="mt-3 max-w-xl text-sm text-muted-foreground sm:text-[15px]">
@@ -445,7 +445,7 @@ function ResultTabs({
   return (
     <section className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="font-serif text-2xl font-medium tracking-tight sm:text-3xl">
+        <h2 className="font-sans text-2xl font-bold tracking-[-0.025em] sm:text-3xl">
           Consultation Result
         </h2>
         <p className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground">
@@ -509,7 +509,7 @@ function AnalysisPanel({ result }: { result: AnalysisResult }) {
             <span className="text-[10px] font-semibold uppercase tracking-[0.32em] text-[color:var(--color-tc-accent-hi)]">
               Recommended Style
             </span>
-            <h3 className="font-serif text-2xl font-semibold tracking-tight sm:text-3xl">
+            <h3 className="font-sans text-2xl font-bold tracking-[-0.025em] sm:text-3xl">
               {result.recommended_style.name}
             </h3>
           </div>
