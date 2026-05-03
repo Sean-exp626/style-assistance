@@ -26,11 +26,15 @@ const THUMBNAIL_FALLBACK = (url: string): string =>
   `https://image.thum.io/get/width/600/maxAge/12/${url}`;
 
 /**
- * 봇 차단(YouTube/Cloudflare 등)으로 og:image도 thum.io 스크린샷도
- * 의미 있는 헤어 사진 대신 "확인 페이지" 스크린샷을 반환하는 도메인.
- * 결과에서 제외해 갤러리 품질을 유지한다.
+ * 결과에서 제외할 도메인 모음.
+ *
+ * - 봇 차단/캡차 (YouTube, namu.wiki, Cloudflare 보호 사이트)
+ * - 쇼핑몰/가격비교 (다나와, 쿠팡 등) — 상품 사진이 잡혀 시술 레퍼런스로 부적절
+ * - 가발/익스텐션 쇼핑몰 — 실제 시술 사진이 아님
+ * - SNS 캡차 페이지 (TikTok, FB, X)
  */
 const BLOCKED_DOMAINS = new Set([
+  // 봇 차단 / 캡차
   "youtube.com",
   "www.youtube.com",
   "m.youtube.com",
@@ -45,6 +49,46 @@ const BLOCKED_DOMAINS = new Set([
   "www.facebook.com",
   "twitter.com",
   "x.com",
+
+  // 쇼핑몰 / 가격비교 — 상품 페이지 제외
+  "danawa.com",
+  "search.danawa.com",
+  "prod.danawa.com",
+  "coupang.com",
+  "www.coupang.com",
+  "11st.co.kr",
+  "www.11st.co.kr",
+  "gmarket.co.kr",
+  "www.gmarket.co.kr",
+  "auction.co.kr",
+  "www.auction.co.kr",
+  "ssg.com",
+  "www.ssg.com",
+  "lotteon.com",
+  "www.lotteon.com",
+  "smartstore.naver.com",
+  "shopping.naver.com",
+  "search.shopping.naver.com",
+  "tmon.co.kr",
+  "wemakeprice.com",
+  "interpark.com",
+  "www.interpark.com",
+
+  // 가발 / 익스텐션 쇼핑몰 — 시술 레퍼런스 아님
+  "gabalnara.com",
+  "www.gabalnara.com",
+  "hairfit.co.kr",
+  "wigko.com",
+
+  // 해외 쇼핑
+  "amazon.com",
+  "www.amazon.com",
+  "aliexpress.com",
+  "www.aliexpress.com",
+  "ebay.com",
+  "www.ebay.com",
+  "qoo10.com",
+  "www.qoo10.com",
 ]);
 
 /**
@@ -89,29 +133,36 @@ function getClient(): Anthropic {
 }
 
 /**
- * 검색 프롬프트 — 헤어 사진 og:image가 잘 잡히는 페이지 위주로 유도.
+ * 검색 프롬프트 — Google Image Search를 활용해 실제 헤어 사진이 박힌 페이지를 모은다.
  *
- * - 네이버 블로그 / Pinterest / Instagram 포스트 / 헤어샵 사이트 / 매거진 위주
- * - YouTube / 위키 / SNS 캡차 페이지는 봇 차단 때문에 의미 없는 이미지가 잡혀 제외
+ * - 디자이너 시술 사례 / 매거진 헤어 기사 / 블로그 후기 위주
+ * - 쇼핑몰 / 가격비교 / 가발 / 캡차 페이지 명시적 제외
  */
 function buildSearchPrompt(keywords: string[], numResults: number): string {
   const keywordBlock = keywords.map((kw) => `"${kw}"`).join(", ");
   const minHits = Math.max(numResults * 2, 10);
+  const googleQuery = keywords.join(" ");
   return (
-    "다음 헤어스타일 키워드로 **헤어 사진이 본문에 직접 박혀 있는 한국 페이지**를 찾아 주세요.\n\n" +
+    "다음 헤어스타일 키워드로 **실제 사람의 헤어 사진(시술 사례)** 이 본문에 들어 있는 페이지를 찾아 주세요.\n\n" +
     `키워드: ${keywordBlock}\n\n` +
-    "우선순위가 높은 출처:\n" +
-    "- 네이버 블로그 (blog.naver.com) — 헤어 시술 후기 포스트\n" +
-    "- Pinterest (pinterest.com / kr.pinterest.com) — 헤어 핀\n" +
-    "- 헤어샵/디자이너 사이트 (designersays, juno hair, chahong 등) — 시술 사례 페이지\n" +
-    "- 패션/뷰티 매거진 (allure, elle, vogue, marieclaire 등) — 헤어 기사\n" +
-    "- 티스토리 / 브런치 / 다음 카페 — 헤어 후기 글\n\n" +
-    "**제외할 출처 (반드시 검색 결과에 포함하지 마세요)**:\n" +
-    "- youtube.com / m.youtube.com / youtu.be (봇 차단으로 썸네일 추출 불가)\n" +
-    "- namu.wiki / wikipedia.org (백과사전, 대표 이미지가 헤어 사진 아님)\n" +
-    "- tiktok.com / facebook.com / twitter.com / x.com (캡차 페이지)\n\n" +
-    `web_search 도구로 최소 ${minHits}건 이상의 결과를 모으되, 위 우선 출처에서 골고루 ` +
-    "다양한 도메인에서 가져와 주세요. 영상이 아닌 사진 게시물 위주로."
+    "검색 방법:\n" +
+    `1) 우선 Google Images에서 \`${googleQuery}\`로 이미지 검색을 수행해 본 뒤, ` +
+    "이미지가 게시된 원본 페이지 URL을 후보로 모읍니다.\n" +
+    "2) 또는 일반 web_search로 다음 우선 출처에서 헤어 사진 포스트를 찾습니다:\n" +
+    "   - 네이버 블로그 (blog.naver.com) — 시술 후기 포스트\n" +
+    "   - Pinterest (kr.pinterest.com / pinterest.com) — 헤어 핀 페이지\n" +
+    "   - 헤어 디자이너 인스타그램/블로그\n" +
+    "   - 매거진 헤어 기사 (allure, elle, vogue, marieclaire, 1stlook, hapers 등)\n" +
+    "   - 티스토리 / 브런치 / 다음 카페 헤어 후기\n\n" +
+    "**반드시 제외할 출처 (검색 결과에 절대 포함하지 마세요)**:\n" +
+    "- 쇼핑몰 / 가격비교: danawa.com, coupang.com, 11st.co.kr, gmarket.co.kr, " +
+    "auction.co.kr, smartstore.naver.com, ssg.com, lotteon.com 등 모든 쇼핑/판매 사이트\n" +
+    "- 가발 / 익스텐션 쇼핑몰: gabalnara.com, hairfit.co.kr 등 (실제 시술 사진이 아님)\n" +
+    "- 동영상 / 백과사전: youtube.com, namu.wiki, wikipedia.org\n" +
+    "- 캡차 페이지: tiktok.com, facebook.com, twitter.com, x.com\n\n" +
+    `web_search 도구로 최소 ${minHits}건 이상의 결과를 모아 주세요. ` +
+    "**상품 사진이 아니라 사람의 실제 헤어 시술 사진**이어야 하고, " +
+    "도메인이 다양하게 분포되도록 합니다. 영상이 아닌 사진 게시물 위주로."
   );
 }
 
@@ -240,13 +291,103 @@ function pickWithDomainDiversity(
   return final;
 }
 
+/* ------------------------- Google Custom Search ------------------------- */
+
+const GOOGLE_CSE_ENDPOINT = "https://www.googleapis.com/customsearch/v1";
+const GOOGLE_CSE_TIMEOUT_MS = 6000;
+
 /**
- * Anthropic web_search 도구를 호출하여 키워드에 맞는 레퍼런스 이미지 후보를 반환한다.
+ * Google Custom Search Engine `image` 검색을 호출한다.
+ *
+ * - GOOGLE_CSE_API_KEY + GOOGLE_CSE_ID 환경변수가 둘 다 있으면 활성화
+ * - 직접 image URL을 받기 때문에 og:image 추출 단계가 불필요 → 가장 신뢰도 높음
+ * - 차단 도메인 + thumbnail 추출 + 다양성 dedup은 그대로 적용
+ * - 환경변수 없거나 호출 실패 시 빈 배열 반환 (호출 측에서 Anthropic web_search 폴백)
+ */
+async function searchViaGoogleImages(
+  keywords: string[],
+  numResults: number,
+): Promise<ReferenceImage[]> {
+  const apiKey = process.env.GOOGLE_CSE_API_KEY;
+  const cseId = process.env.GOOGLE_CSE_ID;
+  if (!apiKey || !cseId) return [];
+
+  // 후보 풀은 차단 도메인 필터로 줄어드므로 여유 있게 가져옴 (Google은 한 번에 최대 10건)
+  const requested = Math.min(Math.max(numResults * 2, 10), 10);
+
+  const params = new URLSearchParams({
+    key: apiKey,
+    cx: cseId,
+    q: keywords.join(" "),
+    searchType: "image",
+    num: String(requested),
+    safe: "active",
+    hl: "ko",
+  });
+
+  let response: Response;
+  try {
+    response = await fetch(`${GOOGLE_CSE_ENDPOINT}?${params.toString()}`, {
+      method: "GET",
+      signal: AbortSignal.timeout(GOOGLE_CSE_TIMEOUT_MS),
+    });
+  } catch (err) {
+    console.error("[search] Google CSE 호출 실패:", err);
+    return [];
+  }
+  if (!response.ok) {
+    console.error("[search] Google CSE 응답 비정상:", response.status);
+    return [];
+  }
+  const payload = (await response.json()) as {
+    items?: Array<{
+      title?: string;
+      link?: string; // 이미지 URL
+      displayLink?: string;
+      image?: { contextLink?: string };
+    }>;
+  };
+  const items = payload.items ?? [];
+
+  const final: ReferenceImage[] = [];
+  const seenDomains = new Set<string>();
+  const halfThreshold = Math.floor(numResults / 2);
+
+  for (const item of items) {
+    const imageUrl = (item.link ?? "").trim();
+    const pageUrl = (item.image?.contextLink ?? imageUrl).trim();
+    if (!imageUrl) continue;
+    const pageDomain = domainOf(pageUrl);
+    if (isBlockedDomain(pageDomain)) continue;
+
+    if (pageDomain && seenDomains.has(pageDomain) && final.length >= halfThreshold) {
+      continue;
+    }
+    seenDomains.add(pageDomain);
+
+    final.push({
+      title: item.title || "레퍼런스",
+      url: pageUrl,
+      image_url: imageUrl,
+      source: item.displayLink || pageDomain,
+    });
+    if (final.length >= numResults) break;
+  }
+  return final;
+}
+
+/* ------------------------- 진입점 ------------------------- */
+
+/**
+ * 키워드에 맞는 레퍼런스 이미지 후보를 반환한다.
+ *
+ * 1순위: Google Custom Search (env 설정 시) — 직접 이미지 URL, 가장 신뢰도 높음
+ * 2순위: Anthropic web_search → 페이지에서 og:image 병렬 추출 → thum.io 폴백
  *
  * - 빈 keywords → 빈 배열
  * - API 키 없음 / API 호출 실패 → 빈 배열 (UI는 빈 상태로 분기)
  * - 후보 풀은 max(numResults*2, numResults+2)만큼 잘라낸 뒤 og:image 병렬 페치
- * - 결과 image_url은 항상 채워짐 (실패 시 thum.io 스크린샷)
+ * - 결과 image_url은 항상 채워짐 (실패 시 thum.io 스크린샷, challenge면 제외)
  */
 export async function searchReferenceImages(
   keywords: string[],
@@ -256,6 +397,13 @@ export async function searchReferenceImages(
     return [];
   }
 
+  // 1순위 — Google CSE (env가 있으면)
+  const fromGoogle = await searchViaGoogleImages(keywords, numResults);
+  if (fromGoogle.length > 0) {
+    return fromGoogle;
+  }
+
+  // 2순위 — Anthropic web_search → og:image 추출
   // og-image.ts를 동적 import — 라우트 핸들러가 이 모듈만 import하면 되도록 진입점 단일화
   const { extractImageFromPage } = await import("./og-image");
 
