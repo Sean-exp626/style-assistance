@@ -26,14 +26,18 @@ const THUMBNAIL_FALLBACK = (url: string): string =>
   `https://image.thum.io/get/width/600/maxAge/12/${url}`;
 
 /**
- * 결과에서 제외할 도메인 모음.
+ * 결과에서 완전히 제외할 도메인 모음 (`BLOCKED_REFERENCE_DOMAINS`).
+ *
+ * 후순위로 밀고 싶을 뿐인 사이트는 `LOW_QUALITY_REFERENCE_DOMAINS`에 둔다.
+ * (게시판은 og:image가 보통 사이트 로고라서 결과 자체는 살리되 다른 후보가 있으면
+ *  그쪽을 먼저 쓰는 편이 사용자 경험에 더 낫다.)
  *
  * - 봇 차단/캡차 (YouTube, namu.wiki, Cloudflare 보호 사이트)
  * - 쇼핑몰/가격비교 (다나와, 쿠팡 등) — 상품 사진이 잡혀 시술 레퍼런스로 부적절
  * - 가발/익스텐션 쇼핑몰 — 실제 시술 사진이 아님
  * - SNS 캡차 페이지 (TikTok, FB, X)
  */
-const BLOCKED_DOMAINS = new Set([
+const BLOCKED_REFERENCE_DOMAINS = new Set([
   // 봇 차단 / 캡차
   "youtube.com",
   "www.youtube.com",
@@ -92,17 +96,47 @@ const BLOCKED_DOMAINS = new Set([
 ]);
 
 /**
+ * 차단까지는 아니지만 후순위로 미는 도메인.
+ *
+ * - 게시판/포럼: og:image가 보통 사이트 로고라 시술 레퍼런스로 약함
+ * - 캡차 빈발: steemit 같은 보호 페이지는 og-image.ts가 잡지만 통과되는 변종이 있어
+ *   채울 후보가 부족할 때만 사용
+ *
+ * pickWithDomainDiversity가 1순위 통과 후보를 모두 소진했을 때만 채우는 용도.
+ */
+const LOW_QUALITY_REFERENCE_DOMAINS = new Set([
+  "instiz.net",
+  "www.instiz.net",
+  "steemit.com",
+  "www.steemit.com",
+  "dcinside.com",
+  "gall.dcinside.com",
+  "www.dcinside.com",
+  "fmkorea.com",
+  "www.fmkorea.com",
+  "ppomppu.co.kr",
+  "www.ppomppu.co.kr",
+]);
+
+function matchesDomainSet(domain: string, set: ReadonlySet<string>): boolean {
+  const d = domain.toLowerCase();
+  if (set.has(d)) return true;
+  for (const entry of set) {
+    if (d.endsWith(`.${entry}`)) return true;
+  }
+  return false;
+}
+
+/**
  * 페이지 도메인을 기준으로 결과에 포함시킬지 판단.
  * www. 접두사 / 모바일 서브도메인 등 변형도 차단 목록에 매칭되도록 한다.
  */
 function isBlockedDomain(domain: string): boolean {
-  const d = domain.toLowerCase();
-  if (BLOCKED_DOMAINS.has(d)) return true;
-  // 서브도메인 매칭 (예: m.youtube.com → youtube.com)
-  for (const blocked of BLOCKED_DOMAINS) {
-    if (d.endsWith(`.${blocked}`)) return true;
-  }
-  return false;
+  return matchesDomainSet(domain, BLOCKED_REFERENCE_DOMAINS);
+}
+
+function isLowQualityDomain(domain: string): boolean {
+  return matchesDomainSet(domain, LOW_QUALITY_REFERENCE_DOMAINS);
 }
 
 export interface ReferenceImage {
@@ -239,8 +273,11 @@ function imageUrlFromExtract(pageUrl: string, ex: ExtractKind | undefined): stri
 /**
  * 후보 리스트를 도메인 다양성을 고려해 numResults개로 추린다.
  *
- * 1차: 같은 도메인이 이미 들어 있고 final이 절반 이상 찼으면 스킵
- * 2차: 부족하면 도메인 중복 허용으로 채움
+ * 통과 단계:
+ *   1) 일반 도메인 (low-quality 아닌)부터, 도메인 중복은 final이 절반 이상일 때 스킵
+ *   2) 부족하면 도메인 중복 허용으로 같은 그룹 채움
+ *   3) 그래도 부족하면 low-quality 도메인 (instiz/steemit 등) 채움
+ *
  * 봇 차단(challenge) 후보는 어떤 단계에서도 결과에 포함되지 않는다.
  */
 function pickWithDomainDiversity(
@@ -252,39 +289,55 @@ function pickWithDomainDiversity(
   const seenDomains = new Set<string>();
   const halfThreshold = Math.floor(numResults / 2);
 
-  for (const cand of candidates) {
-    const imageUrl = imageUrlFromExtract(cand.url, extracted.get(cand.url));
-    if (imageUrl === null) continue; // challenge — 제외
-    const domain = domainOf(cand.url);
+  // low-quality 도메인은 마지막에 별도로 처리하기 위해 분리
+  const primary = candidates.filter((c) => !isLowQualityDomain(domainOf(c.url)));
+  const fallback = candidates.filter((c) => isLowQualityDomain(domainOf(c.url)));
 
-    if (domain && seenDomains.has(domain) && final.length >= halfThreshold) {
-      continue;
+  const tryPush = (cand: RawCandidate, allowDomainDup: boolean): boolean => {
+    const imageUrl = imageUrlFromExtract(cand.url, extracted.get(cand.url));
+    if (imageUrl === null) return false; // challenge — 제외
+    const domain = domainOf(cand.url);
+    if (
+      !allowDomainDup &&
+      domain &&
+      seenDomains.has(domain) &&
+      final.length >= halfThreshold
+    ) {
+      return false;
     }
     seenDomains.add(domain);
-
     final.push({
       title: cand.title,
       url: cand.url,
       image_url: imageUrl,
       source: domain,
     });
+    return true;
+  };
 
+  // 1차 — 1순위 후보, 도메인 다양성 우선
+  for (const cand of primary) {
     if (final.length >= numResults) break;
+    tryPush(cand, false);
   }
 
+  // 2차 — 1순위 후보 안에서 도메인 중복 허용
   if (final.length < numResults) {
     const already = new Set(final.map((f) => f.url));
-    for (const cand of candidates) {
-      if (already.has(cand.url)) continue;
-      const imageUrl = imageUrlFromExtract(cand.url, extracted.get(cand.url));
-      if (imageUrl === null) continue;
-      final.push({
-        title: cand.title,
-        url: cand.url,
-        image_url: imageUrl,
-        source: domainOf(cand.url),
-      });
+    for (const cand of primary) {
       if (final.length >= numResults) break;
+      if (already.has(cand.url)) continue;
+      tryPush(cand, true);
+    }
+  }
+
+  // 3차 — low-quality 후보로 잔여 슬롯 채움
+  if (final.length < numResults) {
+    const already = new Set(final.map((f) => f.url));
+    for (const cand of fallback) {
+      if (final.length >= numResults) break;
+      if (already.has(cand.url)) continue;
+      tryPush(cand, true);
     }
   }
 
