@@ -1,19 +1,20 @@
 "use client";
 
 /**
- * KAI JUNG HAIR · Style Assistance — Phase 1 MVP UI
+ * KAI JUNG HAIR · Style Assistance — Phase 2
  *
- * Phase 1 목표: 분석 흐름이 끝까지 동작하는 단순 화면.
- *   - 정면/측면/뒷면 파일 input 3개 (모두 선택, 최소 1장)
- *   - 성별/기장 옵션
- *   - HEIC → JPEG 변환 + long-edge 1568px 리사이즈는 클라이언트에서 수행
- *   - 결과를 6개 카드로 단순 표시 (face/head/style name/length/key_features/professional_analysis)
- *   - search_keywords는 칩(Badge)으로 노출 — 갤러리 검색은 Phase 2
+ * Phase 1에서 분석 흐름이 끝났고, Phase 2에서는 분석 응답의 `search_keywords`로
+ * 자동 체이닝하여 레퍼런스 갤러리(`/api/references`)를 표시한다.
  *
- * 디자인 폴리싱 (그라디언트 헤더, Cormorant Garamond, 펄스 애니메이션 등) 은 Phase 3.
+ *  - 분석 성공 직후 곧바로 갤러리 fetch 시작 (사용자 추가 클릭 없이)
+ *  - 결과 영역은 ANALYSIS / KEYWORDS / REFERENCES 3개 탭으로 구성
+ *  - 갤러리 로딩 중에는 5개 스켈레톤 표시
+ *
+ * 디자인 폴리싱(Cormorant Garamond, 그라디언트 헤더, 펄스 등)은 Phase 3.
  */
 import { useMemo, useState, useTransition } from "react";
 
+import { ReferenceGallery } from "@/components/reference-gallery";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { convertHeicToJpeg } from "@/lib/heic";
 import { resizeImage } from "@/lib/image-utils";
@@ -44,6 +46,7 @@ import type {
   LengthPreference,
   ViewKey,
 } from "@/lib/prompts";
+import type { ReferenceImage } from "@/lib/search";
 
 const VIEW_LABELS: Record<ViewKey, string> = {
   front: "정면",
@@ -64,6 +67,8 @@ export default function Home() {
   const [lengthPref, setLengthPref] = useState<LengthPreference>("현재 유지");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
+  const [references, setReferences] = useState<ReferenceImage[] | null>(null);
+  const [isLoadingRefs, setIsLoadingRefs] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   const hasAnyFile = useMemo(
@@ -80,10 +85,33 @@ export default function Home() {
     });
   }
 
+  async function fetchReferences(keywords: string[]) {
+    setIsLoadingRefs(true);
+    try {
+      const res = await fetch("/api/references", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keywords, num_results: 5 }),
+      });
+      const json = (await res.json()) as {
+        references?: ReferenceImage[];
+        error?: string;
+      };
+      setReferences(json.references ?? []);
+    } catch (err) {
+      console.error("References fetch failed:", err);
+      setReferences([]);
+    } finally {
+      setIsLoadingRefs(false);
+    }
+  }
+
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
     setResult(null);
+    setReferences(null);
+    setIsLoadingRefs(false);
     if (!hasAnyFile) {
       setError("정면/측면/뒷면 중 최소 한 장의 사진이 필요합니다.");
       return;
@@ -108,11 +136,21 @@ export default function Home() {
           method: "POST",
           body: formData,
         });
-        const json = (await res.json()) as { result?: AnalysisResult; providedViews?: ViewKey[]; error?: string };
+        const json = (await res.json()) as {
+          result?: AnalysisResult;
+          providedViews?: ViewKey[];
+          error?: string;
+        };
         if (!res.ok || !json.result) {
           throw new Error(json.error ?? "분석에 실패했습니다.");
         }
-        setResult({ result: json.result, providedViews: json.providedViews ?? [] });
+        setResult({
+          result: json.result,
+          providedViews: json.providedViews ?? [],
+        });
+        // 분석 성공 → 즉시 갤러리 페치 시작 (await 하지 않고 fire-and-forget)
+        // 사용자는 ANALYSIS / KEYWORDS 탭을 먼저 보고 REFERENCES 탭으로 넘어가면 됨
+        void fetchReferences(json.result.search_keywords);
       } catch (err) {
         // heic2any 등 일부 라이브러리는 plain object를 throw → 메시지 추출을 강화한다.
         console.error("Analysis failed:", err);
@@ -245,7 +283,12 @@ export default function Home() {
       {isPending ? <ResultSkeleton /> : null}
 
       {result && !isPending ? (
-        <ResultView result={result.result} providedViews={result.providedViews} />
+        <ResultTabs
+          result={result.result}
+          providedViews={result.providedViews}
+          references={references}
+          isLoadingRefs={isLoadingRefs}
+        />
       ) : null}
     </div>
   );
@@ -261,12 +304,16 @@ function ResultSkeleton() {
   );
 }
 
-function ResultView({
+function ResultTabs({
   result,
   providedViews,
+  references,
+  isLoadingRefs,
 }: {
   result: AnalysisResult;
   providedViews: ViewKey[];
+  references: ReferenceImage[] | null;
+  isLoadingRefs: boolean;
 }) {
   return (
     <section className="space-y-4">
@@ -279,6 +326,47 @@ function ResultView({
         </p>
       </header>
 
+      <Tabs defaultValue="analysis">
+        <TabsList className="w-full">
+          <TabsTrigger
+            value="analysis"
+            className="text-xs uppercase tracking-[0.16em]"
+          >
+            Analysis
+          </TabsTrigger>
+          <TabsTrigger
+            value="keywords"
+            className="text-xs uppercase tracking-[0.16em]"
+          >
+            Keywords
+          </TabsTrigger>
+          <TabsTrigger
+            value="references"
+            className="text-xs uppercase tracking-[0.16em]"
+          >
+            References
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="analysis" className="mt-4 space-y-4">
+          <AnalysisPanel result={result} />
+        </TabsContent>
+
+        <TabsContent value="keywords" className="mt-4">
+          <KeywordsPanel keywords={result.search_keywords} />
+        </TabsContent>
+
+        <TabsContent value="references" className="mt-4">
+          <ReferenceGallery refs={references} isLoading={isLoadingRefs} />
+        </TabsContent>
+      </Tabs>
+    </section>
+  );
+}
+
+function AnalysisPanel({ result }: { result: AnalysisResult }) {
+  return (
+    <div className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
         <Card>
           <CardHeader className="pb-2">
@@ -324,21 +412,28 @@ function ResultView({
           </p>
         </CardContent>
       </Card>
+    </div>
+  );
+}
 
-      <Card>
-        <CardHeader className="pb-2">
-          <CardDescription>레퍼런스 검색 키워드 (Phase 2에서 갤러리로)</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex flex-wrap gap-2">
-            {result.search_keywords.map((kw) => (
-              <Badge key={kw} variant="secondary">
-                {kw}
-              </Badge>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-    </section>
+function KeywordsPanel({ keywords }: { keywords: string[] }) {
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardDescription>레퍼런스 검색 키워드</CardDescription>
+        <p className="text-xs text-muted-foreground">
+          References 탭의 갤러리는 이 키워드들로 자동 생성됩니다.
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-wrap gap-2">
+          {keywords.map((kw) => (
+            <Badge key={kw} variant="secondary">
+              {kw}
+            </Badge>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
