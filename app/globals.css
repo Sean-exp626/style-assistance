@@ -1,26 +1,103 @@
 @import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+@custom-variant dark (&:is(.dark *));
 
+/*
+ * KAI JUNG HAIR - Design Tokens (Phase 1)
+ *
+ * Phase 1 의도: KAI 컬러 변수만 정의하고 shadcn 시맨틱 변수에 매핑하여
+ * 다크 무드를 시각적으로 일관되게 유지한다. 폰트(Cormorant Garamond),
+ * 그라디언트 헤더, 펄스 애니메이션 등 폴리싱은 Phase 3에서.
+ */
 @theme inline {
+  /* KAI JUNG HAIR brand palette */
+  --color-kj-bg: #0E1414;
+  --color-kj-surface: #161E1F;
+  --color-kj-surface-2: #1C2627;
+  --color-kj-border: #243031;
+  --color-kj-text: #ECEEED;
+  --color-kj-text-muted: #9AA8A9;
+  --color-kj-accent: #2BA8AB;
+  --color-kj-accent-hi: #5DCFD2;
+  --color-kj-accent-fg: #0B1213;
+  --color-kj-danger: #E26D6D;
+
+  /* shadcn token mapping (kept inline for Tailwind v4) */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-heading: var(--font-sans);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/*
+ * Dark-only: KAI JUNG HAIR는 다크 무드 고정. 라이트 테마 변수는 작성하지 않는다.
+ * `:root`에서 곧바로 KAI 변수에 매핑한다.
+ */
+:root {
+  --background: var(--color-kj-bg);
+  --foreground: var(--color-kj-text);
+  --card: var(--color-kj-surface);
+  --card-foreground: var(--color-kj-text);
+  --popover: var(--color-kj-surface);
+  --popover-foreground: var(--color-kj-text);
+  --primary: var(--color-kj-accent);
+  --primary-foreground: var(--color-kj-accent-fg);
+  --secondary: var(--color-kj-surface-2);
+  --secondary-foreground: var(--color-kj-text);
+  --muted: var(--color-kj-surface-2);
+  --muted-foreground: var(--color-kj-text-muted);
+  --accent: var(--color-kj-accent);
+  --accent-foreground: var(--color-kj-accent-fg);
+  --destructive: var(--color-kj-danger);
+  --border: var(--color-kj-border);
+  --input: var(--color-kj-border);
+  --ring: var(--color-kj-accent-hi);
+  --radius: 0.625rem;
+}
+
+html {
+  color-scheme: dark;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
   }
-}
-
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  body {
+    background: var(--color-kj-bg);
+    color: var(--color-kj-text);
+    font-family: var(--font-sans);
+    /* 한국어 줄바꿈 규칙 보존 */
+    word-break: keep-all;
+    overflow-wrap: anywhere;
+  }
+  html {
+    @apply font-sans;
+  }
 }
