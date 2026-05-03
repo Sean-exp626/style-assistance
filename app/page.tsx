@@ -69,6 +69,8 @@ const LENGTH_OPTIONS = [
 interface AnalyzeResponse {
   result: AnalysisResult;
   providedViews: ViewKey[];
+  /** Firestore에 저장된 분석 문서 ID. write 실패 시 undefined일 수 있다. */
+  analysisId?: string;
 }
 
 /* ============================== Page ============================== */
@@ -97,13 +99,14 @@ export default function Home() {
     });
   }
 
-  async function fetchReferences(keywords: string[]) {
+  async function fetchReferences(keywords: string[], analysisId?: string) {
     setIsLoadingRefs(true);
     try {
       const res = await fetch("/api/references", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keywords, num_results: 5 }),
+        // analysisId 동봉 → 서버가 hairAnalyses 문서의 references 필드를 보강한다.
+        body: JSON.stringify({ keywords, num_results: 5, analysisId }),
       });
       const json = (await res.json()) as {
         references?: ReferenceImage[];
@@ -151,6 +154,7 @@ export default function Home() {
         const json = (await res.json()) as {
           result?: AnalysisResult;
           providedViews?: ViewKey[];
+          analysisId?: string;
           error?: string;
         };
         if (!res.ok || !json.result) {
@@ -159,9 +163,10 @@ export default function Home() {
         setResult({
           result: json.result,
           providedViews: json.providedViews ?? [],
+          analysisId: json.analysisId,
         });
-        // 분석 성공 → 갤러리 fire-and-forget
-        void fetchReferences(json.result.search_keywords);
+        // 분석 성공 → 갤러리 fire-and-forget. analysisId가 있으면 서버가 doc도 보강.
+        void fetchReferences(json.result.search_keywords, json.analysisId);
       } catch (err) {
         console.error("Analysis failed:", err);
         let message = "분석 중 알 수 없는 오류가 발생했습니다.";

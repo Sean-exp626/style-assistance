@@ -9,12 +9,18 @@
  *   - length: "현재 유지" | "더 짧게" | "더 길게"
  *
  * 응답:
- *   200 OK { result: AnalysisResult, providedViews: ViewKey[] }
+ *   200 OK { result: AnalysisResult, providedViews: ViewKey[], analysisId?: string }
  *   400 Bad Request { error: string }
+ *   401 Unauthorized { error: string }
  *   500 Internal Server Error { error: string }
  *
- * 책임 분리: 라우터는 입력 검증/직렬화만 담당하고 도메인 로직은 `lib/analyze.ts`로 위임한다.
+ * 책임 분리: 라우터는 입력 검증/직렬화 + 인증 게이트 + 로깅 write만 담당하고,
+ * 도메인 로직은 `lib/analyze.ts`로 위임한다.
  */
+import { FieldValue } from "firebase-admin/firestore";
+
+import { adminAuth, adminDb, verifySessionCookieFromRequest } from "@/lib/firebase/admin";
+import type { HairAnalysisDocInput, ProvidedView } from "@/lib/firebase/types";
 import { analyzeCustomer } from "@/lib/analyze";
 import type {
   Gender,
@@ -34,6 +40,13 @@ const VIEW_LABELS: Record<ViewKey, string> = {
   back: "뒷면",
 };
 
+/** Firestore에 저장할 한국어 view 라벨 — VIEW_LABELS와 같은 매핑이지만 도메인 타입으로 좁힌다 */
+const VIEW_LABELS_KO: Record<ViewKey, ProvidedView> = {
+  front: "정면",
+  side: "측면",
+  back: "뒷면",
+};
+
 const GENDERS: readonly Gender[] = ["남성", "여성"] as const;
 const LENGTHS: readonly LengthPreference[] = [
   "현재 유지",
@@ -48,6 +61,10 @@ function badRequest(error: string): Response {
   return Response.json({ error }, { status: 400 });
 }
 
+function unauthorized(error: string): Response {
+  return Response.json({ error }, { status: 401 });
+}
+
 function isGender(value: unknown): value is Gender {
   return typeof value === "string" && (GENDERS as readonly string[]).includes(value);
 }
@@ -57,6 +74,17 @@ function isLengthPreference(value: unknown): value is LengthPreference {
 }
 
 export async function POST(req: Request): Promise<Response> {
+  // 분석 소요 시간 계측은 인증/검증 비용까지 포함한 사용자 체감 시간을 반영한다.
+  const startedAt = Date.now();
+
+  // 1) 인증 게이트 — 비로그인 요청은 즉시 401
+  const authed = await verifySessionCookieFromRequest(req);
+  if (!authed) {
+    return unauthorized("로그인이 필요합니다.");
+  }
+  const { uid, email } = authed;
+
+  // 2) 입력 파싱 / 검증
   let formData: FormData;
   try {
     formData = await req.formData();
@@ -97,13 +125,44 @@ export async function POST(req: Request): Promise<Response> {
     return badRequest("정면/측면/뒷면 중 최소 한 장의 사진이 필요합니다.");
   }
 
+  // 3) 분석 실행 — 실패는 사용자에게 그대로 노출 (Firestore write는 시도조차 안 함)
   try {
     const result = await analyzeCustomer({
       images,
       gender,
       lengthPreference: length,
     });
-    return Response.json({ result, providedViews }, { status: 200 });
+
+    // 4) Firestore 로깅 — 실패가 분석 응답을 막지 않도록 try/catch로 격리
+    let analysisId: string | undefined;
+    try {
+      // displayName/photoURL은 토큰에 없을 수 있으므로 Admin SDK로 보강
+      const userRecord = await adminAuth.getUser(uid);
+      const docRef = adminDb.collection("hairAnalyses").doc();
+      const payload: HairAnalysisDocInput = {
+        uid,
+        userEmail: email,
+        userDisplayName: userRecord.displayName ?? null,
+        userPhotoURL: userRecord.photoURL ?? null,
+        createdAt: FieldValue.serverTimestamp(),
+        durationMs: Date.now() - startedAt,
+        gender,
+        lengthPreference: length,
+        providedViews: providedViews.map((v) => VIEW_LABELS_KO[v]),
+        result,
+        references: [], // /api/references가 비동기로 update
+      };
+      await docRef.set(payload);
+      analysisId = docRef.id;
+    } catch (writeErr) {
+      // Firestore 장애 / 권한 문제로 분석 결과가 사용자에게 도달하지 못하면 안 된다.
+      console.error("/api/analyze firestore write failed:", writeErr);
+    }
+
+    return Response.json(
+      { result, providedViews, analysisId },
+      { status: 200 },
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : "알 수 없는 오류가 발생했습니다.";
     // 4xx와 5xx 구분이 어려우므로 보수적으로 500으로 통일하되 메시지는 한국어로 노출
