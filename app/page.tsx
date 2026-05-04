@@ -21,6 +21,7 @@ import { ArrowRight, Loader2, Quote, Sparkles } from "lucide-react";
 import { ChipGroup } from "@/components/chip-group";
 import { CoconutLogo, CoconutWordmark } from "@/components/coconut-logo";
 import { FaceMeshOverlay } from "@/components/face-mesh-overlay";
+import { FaceShapeClassifier } from "@/components/face-shape-classifier";
 import { PhotoUploader } from "@/components/photo-uploader";
 import { ReferenceGallery } from "@/components/reference-gallery";
 import { SegmentedControl } from "@/components/segmented-control";
@@ -30,6 +31,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+import { classifyFaceShape } from "@/lib/face-shape";
 import { convertHeicToJpeg } from "@/lib/heic";
 import { resizeImage } from "@/lib/image-utils";
 import type {
@@ -553,12 +555,17 @@ function ResultTabs({
 function AnalysisPanel({
   result,
   frontPreviewUrl,
-  frontLandmarks: _frontLandmarks,
+  frontLandmarks,
 }: {
   result: AnalysisResult;
   frontPreviewUrl: string | null;
   frontLandmarks: number[][] | null;
 }) {
+  // 4단계 폴백 분류기 — useMemo는 분류 비용이 작아 생략 가능하지만 의도 명시.
+  const matched = useMemo(
+    () => classifyFaceShape(result, frontLandmarks),
+    [result, frontLandmarks],
+  );
   return (
     <div className="space-y-6">
       {/* Face Detection — 정면 사진이 있을 때만 mesh 재현 */}
@@ -577,6 +584,9 @@ function AnalysisPanel({
           </CardContent>
         </Card>
       ) : null}
+
+      {/* Face Shape 6분류 아틀라스 */}
+      <FaceShapeClassifier matched={matched} faceShapeText={result.face_shape} />
 
       {/* 메트릭 카드 3개 */}
       <div className="grid gap-3 sm:grid-cols-3">

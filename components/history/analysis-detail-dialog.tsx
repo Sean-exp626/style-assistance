@@ -18,12 +18,14 @@
  */
 import { ExternalLink, Quote } from "lucide-react";
 
+import { FaceShapeClassifier } from "@/components/face-shape-classifier";
 import { Badge } from "@/components/ui/badge";
 import {
   DialogContent,
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { classifyFaceShape } from "@/lib/face-shape";
 import type { HairAnalysisRecord } from "@/lib/firebase/queries";
 
 import { formatKstFull } from "./format";
@@ -72,6 +74,16 @@ export function AnalysisDetailDialog({
       {/* 본문 — 스크롤 가능 */}
       <div className="flex-1 overflow-y-auto px-5 py-5 sm:px-7 sm:py-6">
         <div className="space-y-6">
+          {/* Face Shape 6분류 — 분류 가능할 때만 (history는 hideOnNull) */}
+          <FaceShapeClassifier
+            matched={classifyFaceShape(
+              record.result,
+              record.frontLandmarks ?? null,
+            )}
+            faceShapeText={record.result.face_shape}
+            hideOnNull
+          />
+
           {/* Meta cards */}
           <div className="grid gap-2.5 sm:grid-cols-3">
             <MetricCard label="Face Shape" value={result.face_shape} />
