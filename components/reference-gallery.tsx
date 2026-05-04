@@ -112,7 +112,7 @@ export function ReferenceGallery({
   if (!refs || refs.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-border/80 p-8 text-center text-sm text-muted-foreground">
-        레퍼런스 이미지를 찾지 못했습니다. 다시 시도해 주세요.
+        필터링이 강해 결과를 찾지 못했습니다 — 키워드를 다시 시도해 주세요
       </div>
     );
   }

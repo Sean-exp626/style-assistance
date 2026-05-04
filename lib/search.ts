@@ -93,7 +93,96 @@ const BLOCKED_REFERENCE_DOMAINS = new Set([
   "www.ebay.com",
   "qoo10.com",
   "www.qoo10.com",
+
+  // 광고 네트워크 / 트래커 — og:image도 광고 크리에이티브일 가능성 높음
+  "doubleclick.net",
+  "googlesyndication.com",
+  "googleadservices.com",
+  "adservice.google.com",
+  "2mdn.net",
+  "taboola.com",
+  "outbrain.com",
+  "criteo.com",
+  "criteo.net",
+  "pubmatic.com",
+  "rubiconproject.com",
+  "adnxs.com",
+  "ad.naver.com",
+  "adcr.naver.com",
+  "mediaad.daum.net",
 ]);
+
+/**
+ * 광고 추적용 쿼리 파라미터 키. 단일 키 존재만으로 광고 링크 신호.
+ */
+const AD_QUERY_KEYS = [
+  "gclid",
+  "fbclid",
+  "yclid",
+  "msclkid",
+  "dclid",
+  "promoted",
+  "ad_id",
+  "adset_id",
+] as const;
+
+/**
+ * (key, value) 쌍이 동시에 매칭되어야 하는 광고 마커 (예: utm_medium=cpc).
+ */
+const AD_QUERY_VALUE_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ["utm_medium", "cpc"],
+  ["utm_medium", "ad"],
+  ["utm_source", "ad"],
+];
+
+/**
+ * 헤어 도메인이면 광고 단어가 들어 있어도 살린다 (예: "헤어 이벤트 후기").
+ *
+ * AD_TITLE_RE에 잡히는 후보를 한 번 더 걸러주는 역할.
+ */
+const HAIR_WHITELIST_RE =
+  /(스타일|컷|헤어|미용실|살롱|바버|펌|염색|hairstyle|haircut|salon)/i;
+
+/**
+ * 제목 자체에 광고/홍보/시술 광고성 키워드가 있는 경우.
+ *
+ * 모발이식·증모술·발모는 헤어 카테고리지만 시술 후기보다 광고가 압도적이라
+ * 일괄 제외. (HAIR_WHITELIST_RE에서 `헤어` 같은 일반 단어로 살아나는 걸 막기 위해
+ * 이쪽 검사가 더 좁다.)
+ */
+const AD_TITLE_RE =
+  /(\bsponsored\b|\bpromoted\b|\[광고\]|\[ad\]|광고|이벤트|할인|특가|모발이식|탈모치료|증모술|발모|두피케어\s?(이벤트|특가))/i;
+
+/**
+ * URL에 광고 추적 파라미터가 있으면 true. URL parse 실패 시 false (보수적으로 통과).
+ */
+function isAdUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  const params = parsed.searchParams;
+  for (const key of AD_QUERY_KEYS) {
+    if (params.has(key)) return true;
+  }
+  for (const [key, value] of AD_QUERY_VALUE_PAIRS) {
+    const v = params.get(key);
+    if (v && v.toLowerCase() === value) return true;
+  }
+  return false;
+}
+
+/**
+ * 제목 텍스트가 광고성 키워드를 가지면 true.
+ * 단, `HAIR_WHITELIST_RE`에 매칭되면 하어 컨텍스트로 보고 살린다.
+ */
+function isAdTitle(title: string): boolean {
+  if (!title) return false;
+  if (HAIR_WHITELIST_RE.test(title)) return false;
+  return AD_TITLE_RE.test(title);
+}
 
 /**
  * 차단까지는 아니지만 후순위로 미는 도메인.
@@ -236,8 +325,12 @@ function collectUrlsFromResponse(
 
       if (!url || seen.has(url)) continue;
 
-      // 봇 차단 도메인은 og:image도 thum.io 스크린샷도 의미 없는 페이지가 잡히므로 제외
-      if (isBlockedDomain(domainOf(url))) {
+      // 봇 차단 도메인 + 광고 추적 URL + 광고 타이틀 3중 필터
+      if (
+        isBlockedDomain(domainOf(url)) ||
+        isAdUrl(url) ||
+        isAdTitle(rawTitle)
+      ) {
         blockedCount += 1;
         continue;
       }
@@ -357,17 +450,25 @@ const GOOGLE_CSE_TIMEOUT_MS = 6000;
  * - 차단 도메인 + thumbnail 추출 + 다양성 dedup은 그대로 적용
  * - 환경변수 없거나 호출 실패 시 빈 배열 반환 (호출 측에서 Anthropic web_search 폴백)
  */
-async function searchViaGoogleImages(
+interface GoogleCseItem {
+  title?: string;
+  link?: string; // 이미지 URL
+  displayLink?: string;
+  image?: { contextLink?: string };
+}
+
+/**
+ * 단일 Google CSE 호출. 추가 파라미터(예: imgType=photo)를 합쳐 보낸다.
+ *
+ * 별도 헬퍼로 빼두면 1차(엄격) → 2차(파라미터 없이 폴백) 호출에서 코드 중복 없이 재사용.
+ */
+async function executeGoogleCSE(
   keywords: string[],
-  numResults: number,
-): Promise<ReferenceImage[]> {
-  const apiKey = process.env.GOOGLE_CSE_API_KEY;
-  const cseId = process.env.GOOGLE_CSE_ID;
-  if (!apiKey || !cseId) return [];
-
-  // 후보 풀은 차단 도메인 필터로 줄어드므로 여유 있게 가져옴 (Google은 한 번에 최대 10건)
-  const requested = Math.min(Math.max(numResults * 2, 10), 10);
-
+  requested: number,
+  apiKey: string,
+  cseId: string,
+  extraParams: Record<string, string>,
+): Promise<GoogleCseItem[]> {
   const params = new URLSearchParams({
     key: apiKey,
     cx: cseId,
@@ -376,6 +477,7 @@ async function searchViaGoogleImages(
     num: String(requested),
     safe: "active",
     hl: "ko",
+    ...extraParams,
   });
 
   let response: Response;
@@ -392,15 +494,32 @@ async function searchViaGoogleImages(
     console.error("[search] Google CSE 응답 비정상:", response.status);
     return [];
   }
-  const payload = (await response.json()) as {
-    items?: Array<{
-      title?: string;
-      link?: string; // 이미지 URL
-      displayLink?: string;
-      image?: { contextLink?: string };
-    }>;
-  };
-  const items = payload.items ?? [];
+  const payload = (await response.json()) as { items?: GoogleCseItem[] };
+  return payload.items ?? [];
+}
+
+async function searchViaGoogleImages(
+  keywords: string[],
+  numResults: number,
+): Promise<ReferenceImage[]> {
+  const apiKey = process.env.GOOGLE_CSE_API_KEY;
+  const cseId = process.env.GOOGLE_CSE_ID;
+  if (!apiKey || !cseId) return [];
+
+  // 후보 풀은 차단 도메인 필터로 줄어드므로 여유 있게 가져옴 (Google은 한 번에 최대 10건)
+  const requested = Math.min(Math.max(numResults * 2, 10), 10);
+
+  // 1차: 사진 위주(imgType=photo) + 적정 사이즈 + 흔한 포토 포맷만 → 광고 배너/일러스트 거름
+  let items = await executeGoogleCSE(keywords, requested, apiKey, cseId, {
+    imgType: "photo",
+    imgSize: "medium",
+    fileType: "jpg,png,webp",
+  });
+
+  // 2차: 1차가 0건이면 광고 키워드 영향이거나 너무 좁은 검색 — 파라미터 없이 재시도
+  if (items.length === 0) {
+    items = await executeGoogleCSE(keywords, requested, apiKey, cseId, {});
+  }
 
   const final: ReferenceImage[] = [];
   const seenDomains = new Set<string>();
@@ -411,7 +530,16 @@ async function searchViaGoogleImages(
     const pageUrl = (item.image?.contextLink ?? imageUrl).trim();
     if (!imageUrl) continue;
     const pageDomain = domainOf(pageUrl);
-    if (isBlockedDomain(pageDomain)) continue;
+
+    // 봇 차단 도메인 + 광고 추적 URL + 광고 타이틀 3중 필터 (collectUrlsFromResponse와 동일)
+    if (
+      isBlockedDomain(pageDomain) ||
+      isAdUrl(pageUrl) ||
+      isAdUrl(imageUrl) ||
+      isAdTitle(item.title ?? "")
+    ) {
+      continue;
+    }
 
     if (pageDomain && seenDomains.has(pageDomain) && final.length >= halfThreshold) {
       continue;
