@@ -321,92 +321,115 @@ export function FaceMeshOverlay({
         typeof window !== "undefined" &&
         window.matchMedia("(max-width: 640px)").matches;
 
-      const accent = readCssVar("--color-tc-accent") || "#1E8E91";
-      const accentHi = readCssVar("--color-tc-accent-hi") || "#2BA8AB";
+      // [Image #9] reference — facial proportion analysis 다층 오버레이.
+      // 5개 레이어를 순차로 그려 미용/성형 분석 차트의 외관을 재현한다.
+      const cyan = readCssVar("--color-tc-accent-hi") || "#2BA8AB";
+      const white = readCssVar("--color-tc-text") || "#ECEEED";
+      const red = readCssVar("--color-tc-danger") || "#E26D6D";
+      const green = "#7DDB7A"; // facial analysis green (디자인 토큰 외 단발성 사용)
 
-      // [Image #7] reference style — Delaunay-like 삼각형 mesh (~60 노드).
-      // 방식: 얼굴 전 영역에 분포한 anchor landmark ~60개를 큐레이팅 →
-      //       mediapipe TESSELATION에서 양 끝이 anchor인 edge만 필터.
-      // 이 방식은 stride 샘플링과 달리 항상 검증된 삼각화 edge만 남으므로
-      // 어색한 long-edge가 생기지 않는다.
       const Mp = mp.FaceLandmarker;
-      const tessellation = Mp.FACE_LANDMARKS_TESSELATION ?? [];
 
-      // 얼굴 영역에 고르게 분포한 anchor landmark (~60개)
-      const ANCHORS: ReadonlySet<number> = new Set([
-        // 외곽 face oval (sub-sample)
-        10, 67, 109, 297, 332, 162, 234, 172, 152, 397, 454, 389, 251, 21,
-        // 이마 중앙
-        9, 8, 168,
-        // 눈썹
-        70, 105, 107, 55, 285, 336, 334, 300, 46, 276,
-        // 눈 (각 눈 4점 + 추가)
-        33, 159, 158, 133, 145, 144,
-        263, 386, 385, 362, 374, 373,
-        // 코
-        6, 197, 195, 5, 4, 1, 2, 49, 279,
-        // 광대
-        50, 280, 100, 329,
-        // 입술
-        61, 39, 0, 269, 291, 17, 84, 314,
-        // 턱 / jawline
-        175, 176, 400, 379, 365,
-      ]);
-
-      const edges = tessellation.filter(
-        (c) => ANCHORS.has(c.start) && ANCHORS.has(c.end),
-      );
-
-      // 정점 인덱스 — 위 edges에 등장하는 landmark에만 dot을 찍는다.
-      const vertexIdx = new Set<number>();
-      for (const c of edges) {
-        vertexIdx.add(c.start);
-        vertexIdx.add(c.end);
-      }
+      // polyline 헬퍼
+      const drawLine = (idx: number[]) => {
+        if (idx.length < 2) return;
+        ctx.beginPath();
+        const first = projected[idx[0]];
+        if (!first) return;
+        ctx.moveTo(first.x, first.y);
+        for (let i = 1; i < idx.length; i++) {
+          const p = projected[idx[i]];
+          if (!p) continue;
+          ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      };
+      const drawGroup = (g: Array<{ start: number; end: number }> | undefined) => {
+        if (!g) return;
+        for (const c of g) {
+          const a = projected[c.start];
+          const b = projected[c.end];
+          if (!a || !b) continue;
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        }
+      };
 
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
 
-      // Halo (얇은 alpha 외곽) — 노드가 많아서 라인이 굵으면 답답함
-      ctx.lineWidth = isMobile ? 1.5 : 2;
-      ctx.strokeStyle = withAlpha(accent, 0.3);
-      ctx.beginPath();
-      for (const c of edges) {
-        const a = projected[c.start];
-        const b = projected[c.end];
-        if (!a || !b) continue;
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-      }
-      ctx.stroke();
-
-      // Core (얇은 본선)
-      ctx.lineWidth = isMobile ? 0.6 : 0.8;
-      ctx.strokeStyle = accentHi;
-      ctx.shadowColor = accentHi;
-      ctx.shadowBlur = isMobile ? 3 : 4;
-      ctx.beginPath();
-      for (const c of edges) {
-        const a = projected[c.start];
-        const b = projected[c.end];
-        if (!a || !b) continue;
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-      }
-      ctx.stroke();
+      /* ===== Layer 1: 흰 윤곽선 (얼굴/눈썹/눈/코/입) ===== */
+      ctx.strokeStyle = white;
+      ctx.lineWidth = isMobile ? 0.9 : 1.1;
       ctx.shadowBlur = 0;
 
-      // 정점 dot — 작고 깔끔한 노드
-      const dotR = isMobile ? 1.4 : 1.8;
-      ctx.fillStyle = accentHi;
-      ctx.shadowColor = accentHi;
-      ctx.shadowBlur = isMobile ? 3 : 4;
-      for (const idx of vertexIdx) {
+      drawGroup(Mp.FACE_LANDMARKS_FACE_OVAL);
+      drawGroup(Mp.FACE_LANDMARKS_LEFT_EYEBROW);
+      drawGroup(Mp.FACE_LANDMARKS_RIGHT_EYEBROW);
+      drawGroup(Mp.FACE_LANDMARKS_LEFT_EYE);
+      drawGroup(Mp.FACE_LANDMARKS_RIGHT_EYE);
+      // 입술 outer (mediapipe LIPS는 inner도 포함해 두꺼워 보이므로 outer만 수동)
+      drawLine([61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291]); // upper outer
+      drawLine([291, 375, 321, 405, 314, 17, 84, 181, 91, 146, 61]); // lower outer
+      // 코 — 다리 + 양 wing
+      drawLine([168, 6, 197, 195, 5, 4, 1]); // bridge → tip
+      drawLine([49, 64, 1, 294, 279]); // wings ↔ tip
+
+      /* ===== Layer 2: 흰 dashed 보조선 (수직/수평/내부 삼각) ===== */
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = withAlpha(white, 0.45);
+      ctx.lineWidth = isMobile ? 0.6 : 0.75;
+      drawLine([10, 168, 1, 0, 17, 152]); // 세로 중심선
+      drawLine([33, 263]); // 수평 동공선
+      drawLine([33, 152]); // 좌 눈 → 턱
+      drawLine([263, 152]); // 우 눈 → 턱
+      drawLine([33, 1, 263]); // 눈-코끝-눈 V 삼각
+      ctx.setLineDash([]);
+
+      /* ===== Layer 3: 빨간 분석 삼각형 (광대-광대-턱) + 빨간 점 ===== */
+      ctx.strokeStyle = withAlpha(red, 0.8);
+      ctx.lineWidth = isMobile ? 1 : 1.3;
+      drawLine([234, 454, 152, 234]);
+
+      ctx.fillStyle = red;
+      ctx.shadowColor = red;
+      ctx.shadowBlur = isMobile ? 3 : 5;
+      const redDotR = isMobile ? 2.5 : 3.5;
+      for (const idx of [234, 454, 152]) {
         const p = projected[idx];
         if (!p) continue;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, redDotR, 0, Math.PI * 2);
         ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+
+      /* ===== Layer 4: 초록 nasolabial 라인 (코 wing → 입꼬리) ===== */
+      ctx.strokeStyle = green;
+      ctx.lineWidth = isMobile ? 1.4 : 1.8;
+      ctx.shadowColor = green;
+      ctx.shadowBlur = isMobile ? 3 : 4;
+      drawLine([64, 61]); // 좌
+      drawLine([294, 291]); // 우
+      ctx.shadowBlur = 0;
+
+      /* ===== Layer 5: 청록 cross 마커 (key landmarks) ===== */
+      ctx.strokeStyle = cyan;
+      ctx.lineWidth = isMobile ? 1.5 : 1.8;
+      ctx.shadowColor = cyan;
+      ctx.shadowBlur = isMobile ? 4 : 6;
+      const crossSize = isMobile ? 4 : 5.5;
+      for (const idx of [33, 133, 263, 362, 64, 294, 61, 291]) {
+        const p = projected[idx];
+        if (!p) continue;
+        ctx.beginPath();
+        ctx.moveTo(p.x - crossSize, p.y);
+        ctx.lineTo(p.x + crossSize, p.y);
+        ctx.moveTo(p.x, p.y - crossSize);
+        ctx.lineTo(p.x, p.y + crossSize);
+        ctx.stroke();
       }
       ctx.shadowBlur = 0;
     }
