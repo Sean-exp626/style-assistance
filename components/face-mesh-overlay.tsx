@@ -115,7 +115,8 @@ type State =
   | { kind: "idle" }
   | { kind: "loading-model" }
   | { kind: "analyzing" }
-  | { kind: "ok"; faces: number }            // face mode 성공
+  | { kind: "ok"; faces: number }            // face mode 성공 (실제 landmarks)
+  | { kind: "profile-analyzed" }             // profile mode 폴백 (synth overlay)
   | { kind: "head-mapped" }                  // head mode 성공
   | { kind: "no-face" }
   | { kind: "multi-face"; count: number }
@@ -243,12 +244,19 @@ export function FaceMeshOverlay({
       const faces = detection.faceLandmarks ?? [];
       if (faces.length === 0) {
         // 측면(profile)은 mediapipe가 정면 학습 모델이라 검출 실패가 잦다.
-        // 사용자에게 "No Face"로 멈춘 인상을 주지 않도록 head-mapped로 폴백.
+        // 폴백: figure 박스 비례 기반 합성 overlay(profile-analyzed)로 측면 분석 차트 표시.
         if (mode === "profile") {
-          setState({ kind: "head-mapped" });
-        } else {
-          setState({ kind: "no-face" });
+          setState({ kind: "profile-analyzed" });
+          onLandmarks?.(null);
+          drawProfileFallback();
+          // resize 시 재드로우
+          if (figureRef.current && typeof ResizeObserver !== "undefined") {
+            resizeObserver = new ResizeObserver(drawProfileFallback);
+            resizeObserver.observe(figureRef.current);
+          }
+          return;
         }
+        setState({ kind: "no-face" });
         onLandmarks?.(null);
         clearCanvas();
         return;
@@ -282,6 +290,130 @@ export function FaceMeshOverlay({
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    /**
+     * profile mode 폴백 — landmarks 없이 figure 박스 비례로 합성 overlay 그리기.
+     * 좌측 facing(코가 왼쪽으로 돌출) 가정. 우측 facing이어도 시각적으로 어색하지 않도록
+     * 좌우 대칭성을 일부 유지.
+     */
+    function drawProfileFallback() {
+      const canvas = canvasRef.current;
+      const figure = figureRef.current;
+      if (!canvas || !figure) return;
+      const cssRect = figure.getBoundingClientRect();
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      canvas.width = Math.round(cssRect.width * dpr);
+      canvas.height = Math.round(cssRect.height * dpr);
+      canvas.style.width = `${cssRect.width}px`;
+      canvas.style.height = `${cssRect.height}px`;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const W = cssRect.width;
+      const H = cssRect.height;
+      const isMobile =
+        typeof window !== "undefined" &&
+        window.matchMedia("(max-width: 640px)").matches;
+
+      const cyan = readCssVar("--color-tc-accent-hi") || "#2BA8AB";
+      const white = readCssVar("--color-tc-text") || "#ECEEED";
+      const red = readCssVar("--color-tc-danger") || "#E26D6D";
+      const green = "#7DDB7A";
+
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      // 1) 흰 dashed — 세로 중심선 + 수평 레벨 라인 (이마/눈/코/입/턱)
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = withAlpha(white, 0.45);
+      ctx.lineWidth = isMobile ? 0.6 : 0.8;
+      // 세로
+      ctx.beginPath();
+      ctx.moveTo(W * 0.5, H * 0.12);
+      ctx.lineTo(W * 0.5, H * 0.92);
+      ctx.stroke();
+      // 수평 레벨 5개
+      const levels = [0.22, 0.36, 0.52, 0.68, 0.85];
+      for (const lv of levels) {
+        ctx.beginPath();
+        ctx.moveTo(W * 0.18, H * lv);
+        ctx.lineTo(W * 0.82, H * lv);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+
+      // 2) 흰 윤곽 — 측면 silhouette 근사 (좌측 facing 가정)
+      ctx.strokeStyle = white;
+      ctx.lineWidth = isMobile ? 0.9 : 1.1;
+      ctx.beginPath();
+      ctx.moveTo(W * 0.55, H * 0.12); // 정수리
+      ctx.bezierCurveTo(W * 0.42, H * 0.13, W * 0.32, H * 0.25, W * 0.30, H * 0.40); // 이마-코 위
+      ctx.bezierCurveTo(W * 0.26, H * 0.46, W * 0.26, H * 0.54, W * 0.32, H * 0.58); // 코끝 돌출
+      ctx.bezierCurveTo(W * 0.34, H * 0.62, W * 0.34, H * 0.68, W * 0.40, H * 0.72); // 인중-입
+      ctx.bezierCurveTo(W * 0.42, H * 0.78, W * 0.45, H * 0.85, W * 0.55, H * 0.90); // 턱
+      ctx.stroke();
+
+      // 3) 빨간 분석 삼각형 (이마-코끝-턱) + 빨간 점
+      const tri = [
+        { x: W * 0.50, y: H * 0.20 }, // 이마
+        { x: W * 0.30, y: H * 0.52 }, // 코끝
+        { x: W * 0.50, y: H * 0.88 }, // 턱
+      ];
+      ctx.strokeStyle = withAlpha(red, 0.8);
+      ctx.lineWidth = isMobile ? 1 : 1.3;
+      ctx.beginPath();
+      ctx.moveTo(tri[0].x, tri[0].y);
+      ctx.lineTo(tri[1].x, tri[1].y);
+      ctx.lineTo(tri[2].x, tri[2].y);
+      ctx.closePath();
+      ctx.stroke();
+
+      ctx.fillStyle = red;
+      ctx.shadowColor = red;
+      ctx.shadowBlur = isMobile ? 3 : 5;
+      const redDotR = isMobile ? 2.5 : 3.5;
+      for (const p of tri) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, redDotR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+
+      // 4) 초록 jaw angle 라인 (귀-턱)
+      ctx.strokeStyle = green;
+      ctx.lineWidth = isMobile ? 1.4 : 1.8;
+      ctx.shadowColor = green;
+      ctx.shadowBlur = isMobile ? 3 : 4;
+      ctx.beginPath();
+      ctx.moveTo(W * 0.62, H * 0.55); // 귀 부근
+      ctx.lineTo(W * 0.50, H * 0.88); // 턱 끝
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // 5) 청록 cross 마커 — 정수리/이마/코끝/입/턱
+      ctx.strokeStyle = cyan;
+      ctx.lineWidth = isMobile ? 1.5 : 1.8;
+      ctx.shadowColor = cyan;
+      ctx.shadowBlur = isMobile ? 4 : 6;
+      const crossSize = isMobile ? 4 : 5.5;
+      const crosses = [
+        { x: W * 0.50, y: H * 0.20 },
+        { x: W * 0.30, y: H * 0.52 },
+        { x: W * 0.40, y: H * 0.72 },
+        { x: W * 0.50, y: H * 0.88 },
+      ];
+      for (const p of crosses) {
+        ctx.beginPath();
+        ctx.moveTo(p.x - crossSize, p.y);
+        ctx.lineTo(p.x + crossSize, p.y);
+        ctx.moveTo(p.x, p.y - crossSize);
+        ctx.lineTo(p.x, p.y + crossSize);
+        ctx.stroke();
+      }
+      ctx.shadowBlur = 0;
     }
 
     function drawMesh(mp: MpModule, landmarks: NormalizedLandmark[]) {
@@ -444,7 +576,8 @@ export function FaceMeshOverlay({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source, mode]);
 
-  const meshVisible = state.kind === "ok";
+  const meshVisible =
+    state.kind === "ok" || state.kind === "profile-analyzed";
   const headBracketsVisible = state.kind === "head-mapped";
   const scanVisible =
     state.kind === "loading-model" || state.kind === "analyzing";
@@ -574,6 +707,17 @@ function StatusBadge({ state, mode }: { state: State; mode: Mode }) {
         className={cn(base, "text-[color:var(--color-tc-accent-hi)]")}
       >
         478 pts
+      </span>
+    );
+  }
+  if (state.kind === "profile-analyzed") {
+    return (
+      <span
+        role="status"
+        aria-live="polite"
+        className={cn(base, "text-[color:var(--color-tc-accent-hi)]")}
+      >
+        Profile Analyzed
       </span>
     );
   }
