@@ -324,99 +324,38 @@ export function FaceMeshOverlay({
       const accent = readCssVar("--color-tc-accent") || "#1E8E91";
       const accentHi = readCssVar("--color-tc-accent-hi") || "#2BA8AB";
 
-      // [Image #4] reference style — 수작업 큐레이팅된 ~30 노드 폴리곤.
-      // mediapipe FACE_LANDMARKS_LIPS / EYE 등은 다중 loop를 포함해 노드가
-      // 수십 개씩 찍히므로 사용하지 않고, 명시 인덱스로만 polyline을 구성한다.
-      // (mp는 사용하지 않지만 시그니처 보존을 위해 import는 유지)
-      void mp;
+      // [Image #7] reference style — Delaunay-like 삼각형 mesh (~60 노드).
+      // 방식: 얼굴 전 영역에 분포한 anchor landmark ~60개를 큐레이팅 →
+      //       mediapipe TESSELATION에서 양 끝이 anchor인 edge만 필터.
+      // 이 방식은 stride 샘플링과 달리 항상 검증된 삼각화 edge만 남으므로
+      // 어색한 long-edge가 생기지 않는다.
+      const Mp = mp.FaceLandmarker;
+      const tessellation = Mp.FACE_LANDMARKS_TESSELATION ?? [];
 
-      // mediapipe 표준 landmark 인덱스 (검증된 조합)
-      const FOREHEAD_TOP = 10;
-      const NOSE_TOP = 168;
-      const NOSE_TIP = 1;
-      const UPPER_LIP_CENTER = 0;
-      const LOWER_LIP_CENTER = 17;
-      const CHIN = 152;
-      const L_EYE_OUTER = 33;
-      const L_EYE_TOP = 159;
-      const L_EYE_INNER = 133;
-      const L_EYE_BOTTOM = 145;
-      const R_EYE_OUTER = 263;
-      const R_EYE_TOP = 386;
-      const R_EYE_INNER = 362;
-      const R_EYE_BOTTOM = 374;
-      const L_BROW_OUTER = 70;
-      const L_BROW_MID = 105;
-      const L_BROW_INNER = 107;
-      const R_BROW_INNER = 336;
-      const R_BROW_MID = 334;
-      const R_BROW_OUTER = 300;
-      const L_LIP_CORNER = 61;
-      const R_LIP_CORNER = 291;
-      const UPPER_LIP_L = 39;
-      const UPPER_LIP_R = 269;
-      const L_CHEEK = 234;
-      const R_CHEEK = 454;
-      const L_JAW = 172;
-      const R_JAW = 397;
+      // 얼굴 영역에 고르게 분포한 anchor landmark (~60개)
+      const ANCHORS: ReadonlySet<number> = new Set([
+        // 외곽 face oval (sub-sample)
+        10, 67, 109, 297, 332, 162, 234, 172, 152, 397, 454, 389, 251, 21,
+        // 이마 중앙
+        9, 8, 168,
+        // 눈썹
+        70, 105, 107, 55, 285, 336, 334, 300, 46, 276,
+        // 눈 (각 눈 4점 + 추가)
+        33, 159, 158, 133, 145, 144,
+        263, 386, 385, 362, 374, 373,
+        // 코
+        6, 197, 195, 5, 4, 1, 2, 49, 279,
+        // 광대
+        50, 280, 100, 329,
+        // 입술
+        61, 39, 0, 269, 291, 17, 84, 314,
+        // 턱 / jawline
+        175, 176, 400, 379, 365,
+      ]);
 
-      // Polyline → 연속 edge 변환 헬퍼
-      type Edge = { start: number; end: number };
-      const line = (...idx: number[]): Edge[] => {
-        const out: Edge[] = [];
-        for (let i = 0; i < idx.length - 1; i++) {
-          out.push({ start: idx[i], end: idx[i + 1] });
-        }
-        return out;
-      };
-
-      // 1) 외곽 face oval — 36점 중 10점 sub-sample
-      const ovalLine = line(
-        FOREHEAD_TOP, 67, 162, L_CHEEK, L_JAW, CHIN, R_JAW, R_CHEEK, 389, 297,
-        FOREHEAD_TOP,
+      const edges = tessellation.filter(
+        (c) => ANCHORS.has(c.start) && ANCHORS.has(c.end),
       );
-      // 2) 좌/우 눈 4점 다이아몬드 (closed)
-      const lEyeLine = line(L_EYE_OUTER, L_EYE_TOP, L_EYE_INNER, L_EYE_BOTTOM, L_EYE_OUTER);
-      const rEyeLine = line(R_EYE_OUTER, R_EYE_TOP, R_EYE_INNER, R_EYE_BOTTOM, R_EYE_OUTER);
-      // 3) 눈썹 — 3점 arc (open)
-      const lBrowLine = line(L_BROW_OUTER, L_BROW_MID, L_BROW_INNER);
-      const rBrowLine = line(R_BROW_INNER, R_BROW_MID, R_BROW_OUTER);
-      // 4) 입술 — 6점 polygon
-      const lipsLine = line(
-        L_LIP_CORNER, UPPER_LIP_L, UPPER_LIP_CENTER, UPPER_LIP_R, R_LIP_CORNER,
-        LOWER_LIP_CENTER, L_LIP_CORNER,
-      );
-      // 5) Cross connector — 영역 간 라인 (폴리곤 mesh 골격)
-      const connectors: Edge[] = [
-        // 이마 → 양 눈썹 끝
-        { start: FOREHEAD_TOP, end: L_BROW_OUTER },
-        { start: FOREHEAD_TOP, end: R_BROW_OUTER },
-        // 코 다리 (이마 위 → 코끝)
-        { start: NOSE_TOP, end: NOSE_TIP },
-        // 코 삼각형 (양 눈 안쪽 → 코끝)
-        { start: L_EYE_INNER, end: NOSE_TIP },
-        { start: R_EYE_INNER, end: NOSE_TIP },
-        // 코끝 → 윗입술
-        { start: NOSE_TIP, end: UPPER_LIP_CENTER },
-        // 눈 외각 → 광대
-        { start: L_EYE_OUTER, end: L_CHEEK },
-        { start: R_EYE_OUTER, end: R_CHEEK },
-        // 입꼬리 → 턱
-        { start: L_LIP_CORNER, end: L_JAW },
-        { start: R_LIP_CORNER, end: R_JAW },
-        // 아래입술 → 턱 끝
-        { start: LOWER_LIP_CENTER, end: CHIN },
-      ];
-
-      const edges: Edge[] = [
-        ...ovalLine,
-        ...lEyeLine,
-        ...rEyeLine,
-        ...lBrowLine,
-        ...rBrowLine,
-        ...lipsLine,
-        ...connectors,
-      ];
 
       // 정점 인덱스 — 위 edges에 등장하는 landmark에만 dot을 찍는다.
       const vertexIdx = new Set<number>();
@@ -428,9 +367,9 @@ export function FaceMeshOverlay({
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
 
-      // Halo (두꺼운 alpha 외곽) — 라인 가독성 + 글로우 베이스
-      ctx.lineWidth = isMobile ? 3.5 : 4.5;
-      ctx.strokeStyle = withAlpha(accent, 0.35);
+      // Halo (얇은 alpha 외곽) — 노드가 많아서 라인이 굵으면 답답함
+      ctx.lineWidth = isMobile ? 1.5 : 2;
+      ctx.strokeStyle = withAlpha(accent, 0.3);
       ctx.beginPath();
       for (const c of edges) {
         const a = projected[c.start];
@@ -441,11 +380,11 @@ export function FaceMeshOverlay({
       }
       ctx.stroke();
 
-      // Core (밝은 청록 본선)
-      ctx.lineWidth = isMobile ? 1.5 : 2;
+      // Core (얇은 본선)
+      ctx.lineWidth = isMobile ? 0.6 : 0.8;
       ctx.strokeStyle = accentHi;
       ctx.shadowColor = accentHi;
-      ctx.shadowBlur = isMobile ? 5 : 7;
+      ctx.shadowBlur = isMobile ? 3 : 4;
       ctx.beginPath();
       for (const c of edges) {
         const a = projected[c.start];
@@ -457,11 +396,11 @@ export function FaceMeshOverlay({
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // 정점 dot — reference 이미지의 큰 노드 느낌
-      const dotR = isMobile ? 2.5 : 3.5;
+      // 정점 dot — 작고 깔끔한 노드
+      const dotR = isMobile ? 1.4 : 1.8;
       ctx.fillStyle = accentHi;
       ctx.shadowColor = accentHi;
-      ctx.shadowBlur = isMobile ? 4 : 6;
+      ctx.shadowBlur = isMobile ? 3 : 4;
       for (const idx of vertexIdx) {
         const p = projected[idx];
         if (!p) continue;
