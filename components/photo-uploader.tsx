@@ -22,6 +22,7 @@
 import { useEffect, useId, useState } from "react";
 import { Camera, X } from "lucide-react";
 
+import { FaceMeshOverlay } from "@/components/face-mesh-overlay";
 import { cn } from "@/lib/utils";
 import { convertHeicToJpeg, isHeic } from "@/lib/heic";
 
@@ -34,6 +35,13 @@ interface PhotoUploaderProps {
   /** 보조 안내 카피 (예: "정면을 향한 사진"). 선택. */
   hint?: string;
   className?: string;
+  /**
+   * 미리보기 자리에 FaceMeshOverlay를 띄운다 (정면 슬롯 한정).
+   * mesh 카드도 label 클릭으로 파일 picker 트리거가 되도록 wrap.
+   */
+  withFaceMesh?: boolean;
+  /** mesh 검출 결과(478개 트리플렛)를 부모에게 전달. */
+  onLandmarks?: (lm: number[][] | null) => void;
 }
 
 export function PhotoUploader({
@@ -42,6 +50,8 @@ export function PhotoUploader({
   onChange,
   hint,
   className,
+  withFaceMesh = false,
+  onLandmarks,
 }: PhotoUploaderProps) {
   const inputId = useId();
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -142,16 +152,28 @@ export function PhotoUploader({
       >
         {hasFile && previewUrl ? (
           <>
-            {/* 미리보기 */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={previewUrl}
-              alt={`${label} 미리보기`}
-              className="absolute inset-0 h-full w-full object-cover"
-            />
+            {withFaceMesh ? (
+              // mesh는 자체적으로 img/canvas/배지를 그린다. label 영역 안에 absolute로 배치하되
+              // pointer-events-none을 주지 않아 mesh 영역도 클릭 시 file picker가 열린다.
+              // mesh 컴포넌트의 figure는 자체 border/radius를 가지지만 label이 더 큰 카드라
+              // 시각 충돌은 없다 (object-contain 박스로 mesh가 부모 안에서 fit).
+              <FaceMeshOverlay
+                source={previewUrl}
+                onLandmarks={onLandmarks}
+                variant="interactive"
+                className="absolute inset-0 h-full w-full rounded-none border-0 bg-transparent"
+              />
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={previewUrl}
+                alt={`${label} 미리보기`}
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+            )}
             {/* 하단 그라디언트 — 파일명 가독성 확보 */}
-            <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/75 via-black/30 to-transparent" />
-            <div className="absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-2.5">
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/75 via-black/30 to-transparent" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-end justify-between gap-2 p-2.5">
               <span
                 className="line-clamp-1 max-w-[75%] text-[11px] font-medium text-white/90"
                 title={file?.name}

@@ -15,11 +15,12 @@
  *  - 분석 응답의 `search_keywords`로 자동 체이닝하여 References 탭이 곧바로 채워진다.
  */
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { ArrowRight, Loader2, Quote, Sparkles } from "lucide-react";
 
 import { ChipGroup } from "@/components/chip-group";
 import { CoconutLogo, CoconutWordmark } from "@/components/coconut-logo";
+import { FaceMeshOverlay } from "@/components/face-mesh-overlay";
 import { PhotoUploader } from "@/components/photo-uploader";
 import { ReferenceGallery } from "@/components/reference-gallery";
 import { SegmentedControl } from "@/components/segmented-control";
@@ -84,6 +85,28 @@ export default function Home() {
   const [references, setReferences] = useState<ReferenceImage[] | null>(null);
   const [isLoadingRefs, setIsLoadingRefs] = useState(false);
   const [isPending, startTransition] = useTransition();
+  /**
+   * 정면 사진의 MediaPipe FaceLandmarker 결과 (478개 트리플렛).
+   * PhotoUploader 안의 FaceMeshOverlay에서 흘러 들어와 onSubmit이 폼에 동봉.
+   */
+  const [frontLandmarks, setFrontLandmarks] = useState<number[][] | null>(null);
+  /**
+   * 분석 결과 패널의 mesh 재현용 ObjectURL.
+   * - PhotoUploader가 만든 미리보기 URL은 file 변경 시점에 revoke되어 결과 패널에 살릴 수 없다.
+   * - 따라서 onSubmit 시점에 resized JPEG에서 별도 ObjectURL을 만들어 부모가 직접 관리한다.
+   * - 다음 분석/언마운트 시 revoke.
+   */
+  const [frontPreviewUrl, setFrontPreviewUrl] = useState<string | null>(null);
+
+  // 컴포넌트 unmount 시 ObjectURL 해제
+  useEffect(() => {
+    return () => {
+      if (frontPreviewUrl) URL.revokeObjectURL(frontPreviewUrl);
+    };
+    // unmount 시점의 최신 URL을 잡기 위한 ref 패턴이 깔끔하지만, 단일 페이지 라우트라
+    // unmount 빈도가 낮아 effect cleanup의 stale closure 위험은 무시 가능.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const hasAnyFile = useMemo(
     () => VIEW_KEYS.some((k) => files[k] !== undefined),
@@ -138,6 +161,9 @@ export default function Home() {
         formData.set("gender", gender);
         formData.set("length", lengthPref);
 
+        // 결과 패널 mesh 재현용 — 직전 URL 해제 후 정면 슬롯의 resized blob에서 새 URL 발급
+        let nextFrontPreviewUrl: string | null = null;
+
         for (const view of VIEW_KEYS) {
           const original = files[view];
           if (!original) continue;
@@ -145,7 +171,21 @@ export default function Home() {
           const jpeg = await convertHeicToJpeg(original);
           const resized = await resizeImage(jpeg);
           formData.set(view, resized);
+          if (view === "front") {
+            nextFrontPreviewUrl = URL.createObjectURL(resized);
+          }
         }
+
+        // landmarks를 잡았으면 동봉 (없으면 서버는 silent ignore)
+        if (frontLandmarks) {
+          formData.set("frontLandmarks", JSON.stringify(frontLandmarks));
+        }
+
+        // 직전 URL revoke 후 새 URL 보관
+        setFrontPreviewUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return nextFrontPreviewUrl;
+        });
 
         const res = await fetch("/api/analyze", {
           method: "POST",
@@ -202,6 +242,7 @@ export default function Home() {
           isPending={isPending}
           hasAnyFile={hasAnyFile}
           onSubmit={onSubmit}
+          onFrontLandmarks={setFrontLandmarks}
         />
       </div>
 
@@ -223,6 +264,8 @@ export default function Home() {
             providedViews={result.providedViews}
             references={references}
             isLoadingRefs={isLoadingRefs}
+            frontPreviewUrl={frontPreviewUrl}
+            frontLandmarks={frontLandmarks}
           />
         ) : !error ? (
           <EmptyState />
@@ -271,6 +314,8 @@ interface ConsultationCardProps {
   isPending: boolean;
   hasAnyFile: boolean;
   onSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
+  /** 정면 슬롯의 mesh 검출 결과 콜백 — Home에서 setState를 그대로 흘린다. */
+  onFrontLandmarks: (lm: number[][] | null) => void;
 }
 
 function ConsultationCard({
@@ -283,6 +328,7 @@ function ConsultationCard({
   isPending,
   hasAnyFile,
   onSubmit,
+  onFrontLandmarks,
 }: ConsultationCardProps) {
   return (
     <section className="animate-in fade-in duration-700">
@@ -306,6 +352,8 @@ function ConsultationCard({
                   hint={VIEW_HINTS[view]}
                   file={files[view] ?? null}
                   onChange={(f) => onPickFile(view, f)}
+                  withFaceMesh={view === "front"}
+                  onLandmarks={view === "front" ? onFrontLandmarks : undefined}
                 />
               ))}
             </div>
@@ -441,11 +489,15 @@ function ResultTabs({
   providedViews,
   references,
   isLoadingRefs,
+  frontPreviewUrl,
+  frontLandmarks,
 }: {
   result: AnalysisResult;
   providedViews: ViewKey[];
   references: ReferenceImage[] | null;
   isLoadingRefs: boolean;
+  frontPreviewUrl: string | null;
+  frontLandmarks: number[][] | null;
 }) {
   return (
     <section className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -479,7 +531,11 @@ function ResultTabs({
         </TabsList>
 
         <TabsContent value="analysis" className="mt-8">
-          <AnalysisPanel result={result} />
+          <AnalysisPanel
+            result={result}
+            frontPreviewUrl={frontPreviewUrl}
+            frontLandmarks={frontLandmarks}
+          />
         </TabsContent>
 
         <TabsContent value="keywords" className="mt-8">
@@ -494,9 +550,34 @@ function ResultTabs({
   );
 }
 
-function AnalysisPanel({ result }: { result: AnalysisResult }) {
+function AnalysisPanel({
+  result,
+  frontPreviewUrl,
+  frontLandmarks: _frontLandmarks,
+}: {
+  result: AnalysisResult;
+  frontPreviewUrl: string | null;
+  frontLandmarks: number[][] | null;
+}) {
   return (
     <div className="space-y-6">
+      {/* Face Detection — 정면 사진이 있을 때만 mesh 재현 */}
+      {frontPreviewUrl ? (
+        <Card>
+          <CardContent className="space-y-3 p-3 sm:p-4">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.32em] text-[color:var(--color-tc-accent-hi)]">
+                Face Detection
+              </span>
+              <span className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                478 landmarks · MediaPipe
+              </span>
+            </div>
+            <FaceMeshOverlay source={frontPreviewUrl} variant="readonly" />
+          </CardContent>
+        </Card>
+      ) : null}
+
       {/* 메트릭 카드 3개 */}
       <div className="grid gap-3 sm:grid-cols-3">
         <MetricCard label="Face Shape" value={result.face_shape} />
