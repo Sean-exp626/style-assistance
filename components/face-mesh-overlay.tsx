@@ -66,6 +66,11 @@ async function initLandmarker(): Promise<FaceLandmarkerInstance> {
     baseOptions: { modelAssetPath: MODEL_URL },
     runningMode: "IMAGE",
     numFaces: 2,
+    // 측면 사진 검출률을 높이기 위해 임계값을 낮춤. 정면 false-positive 위험은
+    // numFaces 상한과 결과 후처리(no-face/multi-face) 분기로 제한.
+    minFaceDetectionConfidence: 0.1,
+    minFacePresenceConfidence: 0.1,
+    minTrackingConfidence: 0.1,
   });
   cachedLandmarker = landmarker;
   return landmarker;
@@ -319,22 +324,72 @@ export function FaceMeshOverlay({
       const accent = readCssVar("--color-tc-accent") || "#1E8E91";
       const accentHi = readCssVar("--color-tc-accent-hi") || "#2BA8AB";
 
-      // TESSELATION(약 5000 라인)은 거미줄처럼 보여서 stride로 솎아낸다.
-      // 매 LM_STRIDE번째 landmark만 anchor로 채택 → 양 끝이 anchor인 edge만 남김.
-      // 이렇게 하면 삼각형 구조는 유지되면서 밀도가 ~1/9 수준으로 떨어진다.
-      // face oval은 항상 포함해서 윤곽선이 끊기지 않게 보장.
+      // [Image #4] 스타일 — 수작업 큐레이팅된 폴리곤 mesh.
+      // 윤곽 그룹(oval/eye/eyebrow/lips) + 영역 간 cross connector로
+      // 깔끔한 폴리곤 + 큰 정점 dot 외관을 만든다.
       const Mp = mp.FaceLandmarker;
-      const LM_STRIDE = 3;
-      const isAnchor = (i: number) => i % LM_STRIDE === 0;
+      const ovalEdges = Mp.FACE_LANDMARKS_FACE_OVAL ?? [];
+      const lEyeEdges = Mp.FACE_LANDMARKS_LEFT_EYE ?? [];
+      const rEyeEdges = Mp.FACE_LANDMARKS_RIGHT_EYE ?? [];
+      const lBrowEdges = Mp.FACE_LANDMARKS_LEFT_EYEBROW ?? [];
+      const rBrowEdges = Mp.FACE_LANDMARKS_RIGHT_EYEBROW ?? [];
+      const lipsEdges = Mp.FACE_LANDMARKS_LIPS ?? [];
 
-      const tessellation = Mp.FACE_LANDMARKS_TESSELATION ?? [];
-      const oval = Mp.FACE_LANDMARKS_FACE_OVAL ?? [];
-      const sparseTess = tessellation.filter(
-        (c) => isAnchor(c.start) && isAnchor(c.end),
-      );
-      const edges = [...sparseTess, ...oval];
+      // mediapipe 표준 landmark 인덱스 (검증된 조합)
+      const FOREHEAD_TOP = 10;
+      const NOSE_TOP = 168;
+      const NOSE_TIP = 1;
+      const UPPER_LIP_CENTER = 0;
+      const LOWER_LIP_CENTER = 17;
+      const CHIN = 152;
+      const L_EYE_OUTER = 33;
+      const L_EYE_INNER = 133;
+      const R_EYE_OUTER = 263;
+      const R_EYE_INNER = 362;
+      const L_BROW_OUTER = 70;
+      const R_BROW_OUTER = 300;
+      const L_LIP_CORNER = 61;
+      const R_LIP_CORNER = 291;
+      const L_CHEEK = 234;
+      const R_CHEEK = 454;
+      const L_JAW = 172;
+      const R_JAW = 397;
 
-      // 정점 인덱스 수집 — 위 edges에 등장하는 landmark에만 dot을 찍는다.
+      // 영역 간 cross connector — 폴리곤 mesh 형태를 만든다.
+      const connectors: Array<readonly [number, number]> = [
+        [FOREHEAD_TOP, L_BROW_OUTER],
+        [FOREHEAD_TOP, R_BROW_OUTER],
+        [FOREHEAD_TOP, NOSE_TOP],
+        [L_BROW_OUTER, L_EYE_OUTER],
+        [R_BROW_OUTER, R_EYE_OUTER],
+        [L_EYE_OUTER, L_CHEEK],
+        [R_EYE_OUTER, R_CHEEK],
+        [L_EYE_INNER, NOSE_TIP],
+        [R_EYE_INNER, NOSE_TIP],
+        [NOSE_TIP, UPPER_LIP_CENTER],
+        [L_LIP_CORNER, L_JAW],
+        [R_LIP_CORNER, R_JAW],
+        [LOWER_LIP_CENTER, CHIN],
+        [L_CHEEK, L_JAW],
+        [R_CHEEK, R_JAW],
+        // 입 ↔ 눈 추가 라인 — 광대-입 폴리곤 형성
+        [L_LIP_CORNER, L_EYE_OUTER],
+        [R_LIP_CORNER, R_EYE_OUTER],
+      ];
+
+      // edges 통합 — contour 그룹 + manual connector
+      type Edge = { start: number; end: number };
+      const edges: Edge[] = [
+        ...ovalEdges,
+        ...lEyeEdges,
+        ...rEyeEdges,
+        ...lBrowEdges,
+        ...rBrowEdges,
+        ...lipsEdges,
+        ...connectors.map(([s, e]) => ({ start: s, end: e })),
+      ];
+
+      // 정점 인덱스 — 위 edges에 등장하는 landmark에만 dot을 찍는다.
       const vertexIdx = new Set<number>();
       for (const c of edges) {
         vertexIdx.add(c.start);
@@ -344,9 +399,9 @@ export function FaceMeshOverlay({
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
 
-      // Halo (두꺼운 alpha layer)
-      ctx.lineWidth = isMobile ? 1.5 : 2;
-      ctx.strokeStyle = withAlpha(accent, 0.22);
+      // Halo (두꺼운 alpha 외곽) — 라인 가독성 + 글로우 베이스
+      ctx.lineWidth = isMobile ? 3.5 : 4.5;
+      ctx.strokeStyle = withAlpha(accent, 0.35);
       ctx.beginPath();
       for (const c of edges) {
         const a = projected[c.start];
@@ -357,11 +412,11 @@ export function FaceMeshOverlay({
       }
       ctx.stroke();
 
-      // Core (얇은 윗선)
-      ctx.lineWidth = isMobile ? 0.6 : 0.8;
-      ctx.strokeStyle = withAlpha(accentHi, 0.75);
+      // Core (밝은 청록 본선)
+      ctx.lineWidth = isMobile ? 1.5 : 2;
+      ctx.strokeStyle = accentHi;
       ctx.shadowColor = accentHi;
-      ctx.shadowBlur = isMobile ? 3 : 4;
+      ctx.shadowBlur = isMobile ? 5 : 7;
       ctx.beginPath();
       for (const c of edges) {
         const a = projected[c.start];
@@ -373,11 +428,11 @@ export function FaceMeshOverlay({
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // 정점 dot — anchor에만 작은 발광 점
-      const dotR = isMobile ? 1.1 : 1.4;
+      // 정점 dot — reference 이미지의 큰 노드 느낌
+      const dotR = isMobile ? 2.5 : 3.5;
       ctx.fillStyle = accentHi;
       ctx.shadowColor = accentHi;
-      ctx.shadowBlur = isMobile ? 2 : 3;
+      ctx.shadowBlur = isMobile ? 4 : 6;
       for (const idx of vertexIdx) {
         const p = projected[idx];
         if (!p) continue;
