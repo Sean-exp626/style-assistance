@@ -324,16 +324,11 @@ export function FaceMeshOverlay({
       const accent = readCssVar("--color-tc-accent") || "#1E8E91";
       const accentHi = readCssVar("--color-tc-accent-hi") || "#2BA8AB";
 
-      // [Image #4] 스타일 — 수작업 큐레이팅된 폴리곤 mesh.
-      // 윤곽 그룹(oval/eye/eyebrow/lips) + 영역 간 cross connector로
-      // 깔끔한 폴리곤 + 큰 정점 dot 외관을 만든다.
-      const Mp = mp.FaceLandmarker;
-      const ovalEdges = Mp.FACE_LANDMARKS_FACE_OVAL ?? [];
-      const lEyeEdges = Mp.FACE_LANDMARKS_LEFT_EYE ?? [];
-      const rEyeEdges = Mp.FACE_LANDMARKS_RIGHT_EYE ?? [];
-      const lBrowEdges = Mp.FACE_LANDMARKS_LEFT_EYEBROW ?? [];
-      const rBrowEdges = Mp.FACE_LANDMARKS_RIGHT_EYEBROW ?? [];
-      const lipsEdges = Mp.FACE_LANDMARKS_LIPS ?? [];
+      // [Image #4] reference style — 수작업 큐레이팅된 ~30 노드 폴리곤.
+      // mediapipe FACE_LANDMARKS_LIPS / EYE 등은 다중 loop를 포함해 노드가
+      // 수십 개씩 찍히므로 사용하지 않고, 명시 인덱스로만 polyline을 구성한다.
+      // (mp는 사용하지 않지만 시그니처 보존을 위해 import는 유지)
+      void mp;
 
       // mediapipe 표준 landmark 인덱스 (검증된 조합)
       const FOREHEAD_TOP = 10;
@@ -343,50 +338,84 @@ export function FaceMeshOverlay({
       const LOWER_LIP_CENTER = 17;
       const CHIN = 152;
       const L_EYE_OUTER = 33;
+      const L_EYE_TOP = 159;
       const L_EYE_INNER = 133;
+      const L_EYE_BOTTOM = 145;
       const R_EYE_OUTER = 263;
+      const R_EYE_TOP = 386;
       const R_EYE_INNER = 362;
+      const R_EYE_BOTTOM = 374;
       const L_BROW_OUTER = 70;
+      const L_BROW_MID = 105;
+      const L_BROW_INNER = 107;
+      const R_BROW_INNER = 336;
+      const R_BROW_MID = 334;
       const R_BROW_OUTER = 300;
       const L_LIP_CORNER = 61;
       const R_LIP_CORNER = 291;
+      const UPPER_LIP_L = 39;
+      const UPPER_LIP_R = 269;
       const L_CHEEK = 234;
       const R_CHEEK = 454;
       const L_JAW = 172;
       const R_JAW = 397;
 
-      // 영역 간 cross connector — 폴리곤 mesh 형태를 만든다.
-      const connectors: Array<readonly [number, number]> = [
-        [FOREHEAD_TOP, L_BROW_OUTER],
-        [FOREHEAD_TOP, R_BROW_OUTER],
-        [FOREHEAD_TOP, NOSE_TOP],
-        [L_BROW_OUTER, L_EYE_OUTER],
-        [R_BROW_OUTER, R_EYE_OUTER],
-        [L_EYE_OUTER, L_CHEEK],
-        [R_EYE_OUTER, R_CHEEK],
-        [L_EYE_INNER, NOSE_TIP],
-        [R_EYE_INNER, NOSE_TIP],
-        [NOSE_TIP, UPPER_LIP_CENTER],
-        [L_LIP_CORNER, L_JAW],
-        [R_LIP_CORNER, R_JAW],
-        [LOWER_LIP_CENTER, CHIN],
-        [L_CHEEK, L_JAW],
-        [R_CHEEK, R_JAW],
-        // 입 ↔ 눈 추가 라인 — 광대-입 폴리곤 형성
-        [L_LIP_CORNER, L_EYE_OUTER],
-        [R_LIP_CORNER, R_EYE_OUTER],
+      // Polyline → 연속 edge 변환 헬퍼
+      type Edge = { start: number; end: number };
+      const line = (...idx: number[]): Edge[] => {
+        const out: Edge[] = [];
+        for (let i = 0; i < idx.length - 1; i++) {
+          out.push({ start: idx[i], end: idx[i + 1] });
+        }
+        return out;
+      };
+
+      // 1) 외곽 face oval — 36점 중 10점 sub-sample
+      const ovalLine = line(
+        FOREHEAD_TOP, 67, 162, L_CHEEK, L_JAW, CHIN, R_JAW, R_CHEEK, 389, 297,
+        FOREHEAD_TOP,
+      );
+      // 2) 좌/우 눈 4점 다이아몬드 (closed)
+      const lEyeLine = line(L_EYE_OUTER, L_EYE_TOP, L_EYE_INNER, L_EYE_BOTTOM, L_EYE_OUTER);
+      const rEyeLine = line(R_EYE_OUTER, R_EYE_TOP, R_EYE_INNER, R_EYE_BOTTOM, R_EYE_OUTER);
+      // 3) 눈썹 — 3점 arc (open)
+      const lBrowLine = line(L_BROW_OUTER, L_BROW_MID, L_BROW_INNER);
+      const rBrowLine = line(R_BROW_INNER, R_BROW_MID, R_BROW_OUTER);
+      // 4) 입술 — 6점 polygon
+      const lipsLine = line(
+        L_LIP_CORNER, UPPER_LIP_L, UPPER_LIP_CENTER, UPPER_LIP_R, R_LIP_CORNER,
+        LOWER_LIP_CENTER, L_LIP_CORNER,
+      );
+      // 5) Cross connector — 영역 간 라인 (폴리곤 mesh 골격)
+      const connectors: Edge[] = [
+        // 이마 → 양 눈썹 끝
+        { start: FOREHEAD_TOP, end: L_BROW_OUTER },
+        { start: FOREHEAD_TOP, end: R_BROW_OUTER },
+        // 코 다리 (이마 위 → 코끝)
+        { start: NOSE_TOP, end: NOSE_TIP },
+        // 코 삼각형 (양 눈 안쪽 → 코끝)
+        { start: L_EYE_INNER, end: NOSE_TIP },
+        { start: R_EYE_INNER, end: NOSE_TIP },
+        // 코끝 → 윗입술
+        { start: NOSE_TIP, end: UPPER_LIP_CENTER },
+        // 눈 외각 → 광대
+        { start: L_EYE_OUTER, end: L_CHEEK },
+        { start: R_EYE_OUTER, end: R_CHEEK },
+        // 입꼬리 → 턱
+        { start: L_LIP_CORNER, end: L_JAW },
+        { start: R_LIP_CORNER, end: R_JAW },
+        // 아래입술 → 턱 끝
+        { start: LOWER_LIP_CENTER, end: CHIN },
       ];
 
-      // edges 통합 — contour 그룹 + manual connector
-      type Edge = { start: number; end: number };
       const edges: Edge[] = [
-        ...ovalEdges,
-        ...lEyeEdges,
-        ...rEyeEdges,
-        ...lBrowEdges,
-        ...rBrowEdges,
-        ...lipsEdges,
-        ...connectors.map(([s, e]) => ({ start: s, end: e })),
+        ...ovalLine,
+        ...lEyeLine,
+        ...rEyeLine,
+        ...lBrowLine,
+        ...rBrowLine,
+        ...lipsLine,
+        ...connectors,
       ];
 
       // 정점 인덱스 — 위 edges에 등장하는 landmark에만 dot을 찍는다.
