@@ -115,6 +115,11 @@ interface FaceMeshOverlayProps {
   source: string | null;
   /** landmarks 결과 콜백. null이면 검출 실패 또는 비활성화. */
   onLandmarks?: (lm: number[][] | null) => void;
+  /**
+   * 시맨틱 힌트 — 동작 분기에는 사용되지 않고 sr-only 라벨에만 반영된다.
+   * (현재 readonly에서도 모델 호출은 동일하게 일어남. 추후 캐시된 landmarks를
+   * 받아 재검출 없이 그리기만 하는 변형이 생기면 이 prop이 의미를 가짐.)
+   */
   variant?: Variant;
   className?: string;
 }
@@ -378,8 +383,10 @@ export function FaceMeshOverlay({
 /* --------------------------- 보조 UI --------------------------- */
 
 function StatusBadge({ state }: { state: State }) {
+  // PhotoUploader 안에 figure로 들어갈 때 label 클릭(파일 picker)을 가리지 않도록
+  // pointer-events-none. 시각 정보 전용이라 클릭 타깃일 필요가 없다.
   const base =
-    "absolute right-2 top-2 z-10 inline-flex items-center gap-1.5 rounded-md border border-border/80 bg-[color:var(--color-tc-surface-2)]/90 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.32em] backdrop-blur-sm";
+    "pointer-events-none absolute right-2 top-2 z-10 inline-flex items-center gap-1.5 rounded-md border border-border/80 bg-[color:var(--color-tc-surface-2)]/90 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.32em] backdrop-blur-sm";
 
   if (state.kind === "idle") return null;
   if (state.kind === "loading-model") {

@@ -54,24 +54,34 @@ export function FaceShapeClassifier({
 }: FaceShapeClassifierProps) {
   // hooks는 항상 동일한 순서로 호출 — early return은 모든 hook 호출 이후에.
   const [pulseKey, setPulseKey] = useState(0);
-  const [showPulse, setShowPulse] = useState(false);
+  // pulse는 phase로 표현: "off" | "start" | "end"
+  // - off: 미렌더
+  // - start: 초기 상태(opacity-70, scale-100)로 mount
+  // - end:   종료 상태(opacity-0, scale-1.18)로 전환 → transition이 보간
+  const [pulsePhase, setPulsePhase] = useState<"off" | "start" | "end">("off");
 
-  // ring pulse — matched 변경 시 1회 트리거, 620ms 후 unmount.
-  // react-hooks/set-state-in-effect 룰 회피를 위해 effect 본문에서 동기 setState를 호출하지 않고
-  // microtask로 한 단계 미루어 cascading render 신호를 주지 않는다.
+  // ring pulse — matched 변경 시 1회 트리거, 620ms 후 자동 종료.
+  // 두 단계 mount: 1) start 상태로 렌더, 2) rAF 후 end 상태로 전환 → transition 발화.
   useEffect(() => {
     if (!matched) {
-      const id = setTimeout(() => setShowPulse(false), 0);
+      const id = setTimeout(() => setPulsePhase("off"), 0);
       return () => clearTimeout(id);
     }
     const startId = setTimeout(() => {
-      setShowPulse(true);
       setPulseKey((k) => k + 1);
+      setPulsePhase("start");
     }, 0);
-    const stopId = setTimeout(() => setShowPulse(false), 620);
+    let rafId = 0;
+    const advanceId = setTimeout(() => {
+      // requestAnimationFrame으로 다음 프레임에 종료 상태로 전환
+      rafId = requestAnimationFrame(() => setPulsePhase("end"));
+    }, 16);
+    const stopId = setTimeout(() => setPulsePhase("off"), 700);
     return () => {
       clearTimeout(startId);
+      clearTimeout(advanceId);
       clearTimeout(stopId);
+      if (rafId) cancelAnimationFrame(rafId);
     };
   }, [matched]);
 
@@ -115,17 +125,17 @@ export function FaceShapeClassifier({
                       Matched
                     </span>
                     <span className="sr-only">매칭된 얼굴형</span>
-                    {showPulse ? (
+                    {pulsePhase !== "off" ? (
                       <span
                         key={pulseKey}
                         aria-hidden
-                        className="pointer-events-none absolute inset-0 rounded-xl ring-2 ring-[color:var(--color-tc-accent-hi)] motion-safe:transition-all motion-safe:duration-[600ms] motion-safe:ease-out opacity-0 scale-[1.18]"
-                        style={{
-                          // 시작 상태를 데이터 속성으로 적용하기 위한 트릭은 불필요 —
-                          // mount 시점에는 React가 오프->온 전환을 자동 처리한다.
-                          // 시작 상태를 명시하려면 두 단계 mount가 필요하지만,
-                          // 시각적으로 한 번 사라지는 효과만 주려면 종료 상태만 유지하면 충분.
-                        }}
+                        className={cn(
+                          "pointer-events-none absolute inset-0 rounded-xl ring-2 ring-[color:var(--color-tc-accent-hi)] motion-safe:transition-all motion-safe:duration-[600ms] motion-safe:ease-out",
+                          // start: 초기 상태 (보임 + 일반 크기), end: 종료 상태 (사라지며 확대)
+                          pulsePhase === "start"
+                            ? "opacity-70 scale-100"
+                            : "opacity-0 scale-[1.18]",
+                        )}
                       />
                     ) : null}
                   </>
