@@ -43,7 +43,13 @@ interface PhotoUploaderProps {
    * mesh 카드도 label 클릭으로 파일 picker 트리거가 되도록 wrap.
    */
   withFaceMesh?: boolean;
-  /** mesh 검출 결과(478개 트리플렛)를 부모에게 전달. */
+  /**
+   * mesh 동작 모드.
+   *  - "face" (정면/측면): mediapipe FaceLandmarker로 478점 검출
+   *  - "head" (뒷면): mediapipe 우회, 시뮬레이션 두상 분석 시각만
+   */
+  meshMode?: "face" | "head";
+  /** mesh 검출 결과(478개 트리플렛)를 부모에게 전달. head mode에서는 항상 null. */
   onLandmarks?: (lm: number[][] | null) => void;
 }
 
@@ -54,6 +60,7 @@ export function PhotoUploader({
   hint,
   className,
   withFaceMesh = false,
+  meshMode = "face",
   onLandmarks,
 }: PhotoUploaderProps) {
   const cameraInputId = useId();
@@ -157,6 +164,7 @@ export function PhotoUploader({
               source={previewUrl}
               onLandmarks={onLandmarks}
               variant="interactive"
+              mode={meshMode}
               className="absolute inset-0 h-full w-full rounded-none border-0 bg-transparent"
             />
           ) : (
