@@ -45,10 +45,11 @@ interface PhotoUploaderProps {
   withFaceMesh?: boolean;
   /**
    * mesh 동작 모드.
-   *  - "face" (정면/측면): mediapipe FaceLandmarker로 478점 검출
+   *  - "face" (정면): mediapipe FaceLandmarker로 478점 검출 + contour 폴리곤
+   *  - "profile" (측면): mediapipe 시도 → 검출 실패 시 4-corner 브래킷 폴백
    *  - "head" (뒷면): mediapipe 우회, 시뮬레이션 두상 분석 시각만
    */
-  meshMode?: "face" | "head";
+  meshMode?: "face" | "profile" | "head";
   /** mesh 검출 결과(478개 트리플렛)를 부모에게 전달. head mode에서는 항상 null. */
   onLandmarks?: (lm: number[][] | null) => void;
 }

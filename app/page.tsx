@@ -355,7 +355,9 @@ function ConsultationCard({
                   file={files[view] ?? null}
                   onChange={(f) => onPickFile(view, f)}
                   withFaceMesh
-                  meshMode={view === "back" ? "head" : "face"}
+                  meshMode={
+                    view === "back" ? "head" : view === "side" ? "profile" : "face"
+                  }
                   onLandmarks={view === "front" ? onFrontLandmarks : undefined}
                 />
               ))}

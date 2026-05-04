@@ -104,7 +104,7 @@ function timeoutAfter<T>(promise: Promise<T>, ms: number): Promise<T> {
 /* --------------------------- props/state --------------------------- */
 
 type Variant = "interactive" | "readonly";
-type Mode = "face" | "head";
+type Mode = "face" | "profile" | "head";
 
 type State =
   | { kind: "idle" }
@@ -237,7 +237,13 @@ export function FaceMeshOverlay({
 
       const faces = detection.faceLandmarks ?? [];
       if (faces.length === 0) {
-        setState({ kind: "no-face" });
+        // 측면(profile)은 mediapipe가 정면 학습 모델이라 검출 실패가 잦다.
+        // 사용자에게 "No Face"로 멈춘 인상을 주지 않도록 head-mapped로 폴백.
+        if (mode === "profile") {
+          setState({ kind: "head-mapped" });
+        } else {
+          setState({ kind: "no-face" });
+        }
         onLandmarks?.(null);
         clearCanvas();
         return;
@@ -313,31 +319,75 @@ export function FaceMeshOverlay({
       const accent = readCssVar("--color-tc-accent") || "#1E8E91";
       const accentHi = readCssVar("--color-tc-accent-hi") || "#2BA8AB";
 
-      const tessellation = mp.FaceLandmarker.FACE_LANDMARKS_TESSELATION;
+      // 거미줄처럼 보이던 TESSELLATION(약 5000 라인) 대신 CONTOURS(얼굴 윤곽 + 눈 +
+      // 눈썹 + 입술)만 사용 — reference 이미지처럼 폴리곤 + 정점 dot 스타일.
+      const Mp = mp.FaceLandmarker;
+      const groups = [
+        Mp.FACE_LANDMARKS_FACE_OVAL,
+        Mp.FACE_LANDMARKS_LEFT_EYE,
+        Mp.FACE_LANDMARKS_RIGHT_EYE,
+        Mp.FACE_LANDMARKS_LEFT_EYEBROW,
+        Mp.FACE_LANDMARKS_RIGHT_EYEBROW,
+        Mp.FACE_LANDMARKS_LIPS,
+      ].filter(Boolean);
 
-      ctx.lineWidth = isMobile ? 2 : 2.5;
-      ctx.strokeStyle = withAlpha(accent, 0.18);
+      // 정점 인덱스 수집 — 라인이 지나는 모든 landmark에 dot을 찍는다.
+      const vertexIdx = new Set<number>();
+      for (const g of groups) {
+        for (const c of g) {
+          vertexIdx.add(c.start);
+          vertexIdx.add(c.end);
+        }
+      }
+
+      // Halo (두꺼운 alpha layer)
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = isMobile ? 2.5 : 3;
+      ctx.strokeStyle = withAlpha(accent, 0.35);
       ctx.beginPath();
-      for (const c of tessellation) {
-        const a = projected[c.start];
-        const b = projected[c.end];
-        if (!a || !b) continue;
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
+      for (const g of groups) {
+        for (const c of g) {
+          const a = projected[c.start];
+          const b = projected[c.end];
+          if (!a || !b) continue;
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+        }
       }
       ctx.stroke();
 
-      ctx.lineWidth = isMobile ? 0.75 : 1;
-      ctx.strokeStyle = withAlpha(accentHi, 0.7);
+      // Core (얇은 윗선) — 발광 shadow로 글로우 효과
+      ctx.lineWidth = isMobile ? 1 : 1.25;
+      ctx.strokeStyle = withAlpha(accentHi, 0.95);
+      ctx.shadowColor = accentHi;
+      ctx.shadowBlur = isMobile ? 4 : 6;
       ctx.beginPath();
-      for (const c of tessellation) {
-        const a = projected[c.start];
-        const b = projected[c.end];
-        if (!a || !b) continue;
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
+      for (const g of groups) {
+        for (const c of g) {
+          const a = projected[c.start];
+          const b = projected[c.end];
+          if (!a || !b) continue;
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+        }
       }
       ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // 정점 dot — reference 이미지의 노드 느낌
+      const dotR = isMobile ? 1.5 : 2;
+      ctx.fillStyle = accentHi;
+      ctx.shadowColor = accentHi;
+      ctx.shadowBlur = isMobile ? 3 : 5;
+      for (const idx of vertexIdx) {
+        const p = projected[idx];
+        if (!p) continue;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
     }
 
     void run();
