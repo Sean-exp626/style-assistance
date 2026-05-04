@@ -19,6 +19,11 @@ import type { ReferenceImage } from "@/lib/search";
 /** 분석 결과(도메인 응답) — `lib/prompts.ts`의 AnalysisResult와 동일 형태를 직접 명세 */
 export interface AnalysisResultDoc {
   face_shape: string;
+  /**
+   * 6분류 enum 라벨. 모델이 보내지 않거나 인식 못한 값일 수 있어 string으로 느슨하게.
+   * 실제 enum 보장은 `AnalysisResultSchema.face_shape_category`에서.
+   */
+  face_shape_category?: string;
   head_shape: string;
   recommended_style: {
     name: string;
@@ -53,6 +58,13 @@ export interface HairAnalysisDoc {
   providedViews: ProvidedView[];
   result: AnalysisResultDoc;
   references: ReferenceImage[];
+  /**
+   * 정면 사진의 MediaPipe FaceLandmarker 478개 정규화 좌표 [x, y, z][].
+   *
+   * - 분석 시점에 클라이언트에서 추출, 서버는 검증 후 그대로 저장
+   * - 사후 분류기/시각화 재현용 — 분석 직후뿐 아니라 history 모달에서도 재사용
+   */
+  frontLandmarks?: number[][];
 }
 
 /**

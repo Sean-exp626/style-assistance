@@ -125,6 +125,32 @@ export async function POST(req: Request): Promise<Response> {
     return badRequest("정면/측면/뒷면 중 최소 한 장의 사진이 필요합니다.");
   }
 
+  // 정면 MediaPipe landmarks (선택). silent ignore — 분석 자체를 막지 않는다.
+  let frontLandmarks: number[][] | undefined;
+  const rawLandmarks = formData.get("frontLandmarks");
+  if (typeof rawLandmarks === "string" && rawLandmarks.length > 0) {
+    try {
+      const parsed = JSON.parse(rawLandmarks) as unknown;
+      if (
+        Array.isArray(parsed) &&
+        parsed.length > 0 &&
+        parsed.length <= 1500 &&
+        parsed.every(
+          (p) =>
+            Array.isArray(p) &&
+            p.length === 3 &&
+            p.every((n) => typeof n === "number" && Number.isFinite(n)),
+        )
+      ) {
+        frontLandmarks = parsed as number[][];
+      } else {
+        console.warn("/api/analyze frontLandmarks 형식 불일치 — 무시");
+      }
+    } catch (parseErr) {
+      console.warn("/api/analyze frontLandmarks JSON parse 실패 — 무시:", parseErr);
+    }
+  }
+
   // 3) 분석 실행 — 실패는 사용자에게 그대로 노출 (Firestore write는 시도조차 안 함)
   try {
     const result = await analyzeCustomer({
@@ -152,6 +178,9 @@ export async function POST(req: Request): Promise<Response> {
         result,
         references: [], // /api/references가 비동기로 update
       };
+      if (frontLandmarks) {
+        payload.frontLandmarks = frontLandmarks;
+      }
       await docRef.set(payload);
       analysisId = docRef.id;
     } catch (writeErr) {

@@ -40,6 +40,8 @@ export interface HairAnalysisRecord {
   providedViews: ProvidedView[];
   result: AnalysisResultDoc;
   references: ReferenceImage[];
+  /** 정면 MediaPipe landmarks (있을 때만). 분류기/시각화 재현에 사용. */
+  frontLandmarks?: number[][];
 }
 
 const COLLECTION = "hairAnalyses";
@@ -136,6 +138,9 @@ function toRecord(doc: FirestoreDocLike): HairAnalysisRecord {
     references: Array.isArray(data.references)
       ? (data.references as ReferenceImage[])
       : [],
+    frontLandmarks: Array.isArray(data.frontLandmarks)
+      ? (data.frontLandmarks as number[][])
+      : undefined,
   };
 }
 
