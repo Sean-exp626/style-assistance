@@ -193,7 +193,48 @@ export function FaceMeshOverlay({
       };
     }
 
-    /* ============= face mode (정면/측면) — mediapipe 검출 ============= */
+    /* ============= profile mode (측면) — mediapipe 우회, 합성 overlay ============= */
+    // mediapipe는 정면 학습 모델이라 측면 검출이 신뢰 불가 (배경/옷에 false positive
+    // 잡거나 landmarks가 화면 밖으로 가는 케이스 빈발). 항상 합성 overlay로 처리.
+    if (mode === "profile") {
+      onLandmarks?.(null);
+
+      async function runProfile() {
+        setState({ kind: "loading-model" });
+        const img = imgRef.current;
+        if (!img) {
+          setState({ kind: "error", message: "이미지 요소 없음" });
+          return;
+        }
+        try {
+          await waitImageLoaded(img);
+        } catch {
+          if (cancelled) return;
+          setState({ kind: "error", message: "이미지 로드 실패" });
+          return;
+        }
+        if (cancelled) return;
+        setState({ kind: "analyzing" });
+        headTimer = setTimeout(() => {
+          if (cancelled) return;
+          setState({ kind: "profile-analyzed" });
+          drawProfileFallback();
+          if (figureRef.current && typeof ResizeObserver !== "undefined") {
+            resizeObserver = new ResizeObserver(drawProfileFallback);
+            resizeObserver.observe(figureRef.current);
+          }
+        }, HEAD_SCAN_DURATION_MS);
+      }
+      void runProfile();
+
+      return () => {
+        cancelled = true;
+        if (headTimer) clearTimeout(headTimer);
+        if (resizeObserver) resizeObserver.disconnect();
+      };
+    }
+
+    /* ============= face mode (정면) — mediapipe 검출 ============= */
     async function run() {
       setState({ kind: "loading-model" });
 
@@ -243,19 +284,7 @@ export function FaceMeshOverlay({
 
       const faces = detection.faceLandmarks ?? [];
       if (faces.length === 0) {
-        // 측면(profile)은 mediapipe가 정면 학습 모델이라 검출 실패가 잦다.
-        // 폴백: figure 박스 비례 기반 합성 overlay(profile-analyzed)로 측면 분석 차트 표시.
-        if (mode === "profile") {
-          setState({ kind: "profile-analyzed" });
-          onLandmarks?.(null);
-          drawProfileFallback();
-          // resize 시 재드로우
-          if (figureRef.current && typeof ResizeObserver !== "undefined") {
-            resizeObserver = new ResizeObserver(drawProfileFallback);
-            resizeObserver.observe(figureRef.current);
-          }
-          return;
-        }
+        // face mode 전용 — profile은 위에서 이미 합성 overlay로 처리됨
         setState({ kind: "no-face" });
         onLandmarks?.(null);
         clearCanvas();
