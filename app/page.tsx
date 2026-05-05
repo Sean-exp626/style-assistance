@@ -113,11 +113,13 @@ export default function Home() {
    * - 다음 분석/언마운트 시 revoke.
    */
   const [frontPreviewUrl, setFrontPreviewUrl] = useState<string | null>(null);
+  const [sidePreviewUrl, setSidePreviewUrl] = useState<string | null>(null);
 
   // 컴포넌트 unmount 시 ObjectURL 해제
   useEffect(() => {
     return () => {
       if (frontPreviewUrl) URL.revokeObjectURL(frontPreviewUrl);
+      if (sidePreviewUrl) URL.revokeObjectURL(sidePreviewUrl);
     };
     // unmount 시점의 최신 URL을 잡기 위한 ref 패턴이 깔끔하지만, 단일 페이지 라우트라
     // unmount 빈도가 낮아 effect cleanup의 stale closure 위험은 무시 가능.
@@ -177,8 +179,9 @@ export default function Home() {
         formData.set("gender", gender);
         formData.set("length", lengthPref);
 
-        // 결과 패널 mesh 재현용 — 직전 URL 해제 후 정면 슬롯의 resized blob에서 새 URL 발급
+        // 결과 패널 mesh 재현용 — 직전 URL 해제 후 정면/측면 슬롯의 resized blob에서 새 URL 발급
         let nextFrontPreviewUrl: string | null = null;
+        let nextSidePreviewUrl: string | null = null;
 
         for (const view of VIEW_KEYS) {
           const original = files[view];
@@ -189,6 +192,8 @@ export default function Home() {
           formData.set(view, resized);
           if (view === "front") {
             nextFrontPreviewUrl = URL.createObjectURL(resized);
+          } else if (view === "side") {
+            nextSidePreviewUrl = URL.createObjectURL(resized);
           }
         }
 
@@ -207,6 +212,10 @@ export default function Home() {
         setFrontPreviewUrl((prev) => {
           if (prev) URL.revokeObjectURL(prev);
           return nextFrontPreviewUrl;
+        });
+        setSidePreviewUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return nextSidePreviewUrl;
         });
 
         const res = await fetch("/api/analyze", {
@@ -290,6 +299,7 @@ export default function Home() {
             isLoadingRefs={isLoadingRefs}
             frontPreviewUrl={frontPreviewUrl}
             frontLandmarks={frontLandmarks}
+            sidePreviewUrl={sidePreviewUrl}
           />
         ) : !error ? (
           <EmptyState />
@@ -526,6 +536,7 @@ function ResultTabs({
   isLoadingRefs,
   frontPreviewUrl,
   frontLandmarks,
+  sidePreviewUrl,
 }: {
   result: AnalysisResult;
   providedViews: ViewKey[];
@@ -533,6 +544,7 @@ function ResultTabs({
   isLoadingRefs: boolean;
   frontPreviewUrl: string | null;
   frontLandmarks: number[][] | null;
+  sidePreviewUrl: string | null;
 }) {
   return (
     <section className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -570,6 +582,7 @@ function ResultTabs({
             result={result}
             frontPreviewUrl={frontPreviewUrl}
             frontLandmarks={frontLandmarks}
+            sidePreviewUrl={sidePreviewUrl}
           />
         </TabsContent>
 
@@ -589,10 +602,12 @@ function AnalysisPanel({
   result,
   frontPreviewUrl,
   frontLandmarks,
+  sidePreviewUrl,
 }: {
   result: AnalysisResult;
   frontPreviewUrl: string | null;
   frontLandmarks: number[][] | null;
+  sidePreviewUrl: string | null;
 }) {
   // 4단계 폴백 분류기 — useMemo는 분류 비용이 작아 생략 가능하지만 의도 명시.
   const matched = useMemo(
@@ -614,6 +629,27 @@ function AnalysisPanel({
               </span>
             </div>
             <FaceMeshOverlay source={frontPreviewUrl} variant="readonly" />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {/* Side Profile Detection — 측면 사진이 있을 때만 sparse keypoint mesh 재현 */}
+      {sidePreviewUrl ? (
+        <Card>
+          <CardContent className="space-y-3 p-3 sm:p-4">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.32em] text-[color:var(--color-tc-accent-hi)]">
+                Side Profile Detection
+              </span>
+              <span className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
+                sparse keypoints · MediaPipe
+              </span>
+            </div>
+            <FaceMeshOverlay
+              source={sidePreviewUrl}
+              variant="readonly"
+              mode="profile"
+            />
           </CardContent>
         </Card>
       ) : null}
