@@ -20,6 +20,11 @@
 import { FieldValue } from "firebase-admin/firestore";
 
 import { adminAuth, adminDb, verifySessionCookieFromRequest } from "@/lib/firebase/admin";
+import {
+  SIDE_KEYPOINT_NAMES,
+  type SideProfileLandmarks,
+  type SideProfileMetrics,
+} from "@/lib/face-shape";
 import type { HairAnalysisDocInput, ProvidedView } from "@/lib/firebase/types";
 import { analyzeCustomer } from "@/lib/analyze";
 import type {
@@ -151,12 +156,96 @@ export async function POST(req: Request): Promise<Response> {
     }
   }
 
+  // 측면 sparse keypoint (선택). silent ignore.
+  let sideLandmarks: SideProfileLandmarks | undefined;
+  const rawSideLm = formData.get("sideLandmarks");
+  if (typeof rawSideLm === "string" && rawSideLm.length > 0) {
+    try {
+      const parsed = JSON.parse(rawSideLm) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const obj = parsed as Record<string, unknown>;
+        const yaw = obj.yaw;
+        const keypointsRaw = obj.keypoints;
+        const yawOk =
+          yaw === "left" || yaw === "right" || yaw === "near-frontal";
+        if (
+          yawOk &&
+          keypointsRaw &&
+          typeof keypointsRaw === "object" &&
+          !Array.isArray(keypointsRaw)
+        ) {
+          const kpEntries = Object.entries(
+            keypointsRaw as Record<string, unknown>,
+          );
+          const allValid = kpEntries.every(([k, v]) => {
+            if (!(SIDE_KEYPOINT_NAMES as readonly string[]).includes(k)) return false;
+            return (
+              Array.isArray(v) &&
+              v.length === 3 &&
+              v.every((n) => typeof n === "number" && Number.isFinite(n))
+            );
+          });
+          if (allValid) {
+            sideLandmarks = {
+              yaw,
+              keypoints: Object.fromEntries(kpEntries) as SideProfileLandmarks["keypoints"],
+            };
+          } else {
+            console.warn("/api/analyze sideLandmarks keypoints 형식 불일치 — 무시");
+          }
+        } else {
+          console.warn("/api/analyze sideLandmarks 형식 불일치 — 무시");
+        }
+      }
+    } catch (parseErr) {
+      console.warn("/api/analyze sideLandmarks JSON parse 실패 — 무시:", parseErr);
+    }
+  }
+
+  // 측면 4각도 메트릭 (선택). silent ignore.
+  let sideMetrics: SideProfileMetrics | undefined;
+  const rawSideMetrics = formData.get("sideMetrics");
+  if (typeof rawSideMetrics === "string" && rawSideMetrics.length > 0) {
+    try {
+      const parsed = JSON.parse(rawSideMetrics) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const obj = parsed as Record<string, unknown>;
+        const allowed = [
+          "nasofrontal_angle",
+          "mentolabial_angle",
+          "facial_convexity",
+          "jaw_angle",
+        ] as const;
+        const out: SideProfileMetrics = {};
+        let anyKept = false;
+        let anyBad = false;
+        for (const key of allowed) {
+          const v = obj[key];
+          if (v === undefined) continue;
+          if (typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 180) {
+            out[key] = v;
+            anyKept = true;
+          } else {
+            anyBad = true;
+          }
+        }
+        if (anyBad) {
+          console.warn("/api/analyze sideMetrics 일부 필드 형식 불일치 — 해당 필드 무시");
+        }
+        if (anyKept) sideMetrics = out;
+      }
+    } catch (parseErr) {
+      console.warn("/api/analyze sideMetrics JSON parse 실패 — 무시:", parseErr);
+    }
+  }
+
   // 3) 분석 실행 — 실패는 사용자에게 그대로 노출 (Firestore write는 시도조차 안 함)
   try {
     const result = await analyzeCustomer({
       images,
       gender,
       lengthPreference: length,
+      sideMetrics,
     });
 
     // 4) Firestore 로깅 — 실패가 분석 응답을 막지 않도록 try/catch로 격리
@@ -180,6 +269,12 @@ export async function POST(req: Request): Promise<Response> {
       };
       if (frontLandmarks) {
         payload.frontLandmarks = frontLandmarks;
+      }
+      if (sideLandmarks) {
+        payload.sideLandmarks = sideLandmarks;
+      }
+      if (sideMetrics) {
+        payload.sideMetrics = sideMetrics;
       }
       await docRef.set(payload);
       analysisId = docRef.id;

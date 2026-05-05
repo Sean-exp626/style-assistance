@@ -19,6 +19,7 @@ import {
   type AnalysisResult,
   type Gender,
   type LengthPreference,
+  type SideMetricsHint,
   type ViewKey,
 } from "./prompts";
 
@@ -124,6 +125,7 @@ function buildMessages(
   images: Partial<Record<ViewKey, Buffer>>,
   gender: Gender,
   lengthPreference: LengthPreference,
+  sideMetrics?: SideMetricsHint,
 ): Array<{ role: "user"; content: UserContentBlock[] }> {
   const orderedKeys = VIEW_ORDER.filter((k): k is ViewKey => images[k] !== undefined);
   if (orderedKeys.length === 0) {
@@ -139,7 +141,7 @@ function buildMessages(
   }
   content.push({
     type: "text",
-    text: buildUserPrompt(gender, lengthPreference, orderedKeys),
+    text: buildUserPrompt(gender, lengthPreference, orderedKeys, sideMetrics),
   });
 
   return [{ role: "user", content }];
@@ -151,6 +153,11 @@ export interface AnalyzeCustomerParams {
   images: Partial<Record<ViewKey, Buffer>>;
   gender: Gender;
   lengthPreference: LengthPreference;
+  /**
+   * 측면 사진 MediaPipe 분석에서 추출된 4각도 hint (선택).
+   * 모델은 이 수치를 참고하되 본인 시각 분석으로 override 가능.
+   */
+  sideMetrics?: SideMetricsHint;
 }
 
 let cachedClient: Anthropic | null = null;
@@ -172,7 +179,12 @@ export async function analyzeCustomer(
   params: AnalyzeCustomerParams,
 ): Promise<AnalysisResult> {
   const client = getClient();
-  const messages = buildMessages(params.images, params.gender, params.lengthPreference);
+  const messages = buildMessages(
+    params.images,
+    params.gender,
+    params.lengthPreference,
+    params.sideMetrics,
+  );
 
   let response;
   try {

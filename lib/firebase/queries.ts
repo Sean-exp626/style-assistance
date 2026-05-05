@@ -12,6 +12,11 @@
  *  - 본인/관리자 권한 체크는 *호출 측의 책임* — 이 모듈은 단순 데이터 접근 계층
  */
 import { adminDb } from "@/lib/firebase/admin";
+import {
+  SIDE_KEYPOINT_NAMES,
+  type SideProfileLandmarks,
+  type SideProfileMetrics,
+} from "@/lib/face-shape";
 import type {
   AnalysisResultDoc,
   ProvidedView,
@@ -42,6 +47,10 @@ export interface HairAnalysisRecord {
   references: ReferenceImage[];
   /** 정면 MediaPipe landmarks (있을 때만). 분류기/시각화 재현에 사용. */
   frontLandmarks?: number[][];
+  /** 측면 sparse keypoint (있을 때만). UI에는 노출하지 않는다. */
+  sideLandmarks?: SideProfileLandmarks;
+  /** 측면 4각도 메트릭 (있을 때만). UI에는 노출하지 않는다. */
+  sideMetrics?: SideProfileMetrics;
 }
 
 const COLLECTION = "hairAnalyses";
@@ -141,7 +150,57 @@ function toRecord(doc: FirestoreDocLike): HairAnalysisRecord {
     frontLandmarks: Array.isArray(data.frontLandmarks)
       ? (data.frontLandmarks as number[][])
       : undefined,
+    sideLandmarks: parseSideLandmarksField(data.sideLandmarks),
+    sideMetrics: parseSideMetricsField(data.sideMetrics),
   };
+}
+
+/**
+ * Firestore에 저장된 sideLandmarks 필드를 안전하게 복원한다.
+ * - 형식이 맞지 않으면 undefined (예외 throw 금지 — 한 문서 망가졌다고 history UI를 깨뜨리지 않음).
+ */
+function parseSideLandmarksField(v: unknown): SideProfileLandmarks | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const obj = v as Record<string, unknown>;
+  const yaw = obj.yaw;
+  if (yaw !== "left" && yaw !== "right" && yaw !== "near-frontal") return undefined;
+  const kpRaw = obj.keypoints;
+  if (!kpRaw || typeof kpRaw !== "object" || Array.isArray(kpRaw)) return undefined;
+  const out: SideProfileLandmarks["keypoints"] = {};
+  for (const [k, val] of Object.entries(kpRaw as Record<string, unknown>)) {
+    if (!(SIDE_KEYPOINT_NAMES as readonly string[]).includes(k)) return undefined;
+    if (
+      !Array.isArray(val) ||
+      val.length !== 3 ||
+      !val.every((n) => typeof n === "number" && Number.isFinite(n))
+    ) {
+      return undefined;
+    }
+    out[k as keyof SideProfileLandmarks["keypoints"]] = val as [number, number, number];
+  }
+  return { yaw, keypoints: out };
+}
+
+function parseSideMetricsField(v: unknown): SideProfileMetrics | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const obj = v as Record<string, unknown>;
+  const allowed = [
+    "nasofrontal_angle",
+    "mentolabial_angle",
+    "facial_convexity",
+    "jaw_angle",
+  ] as const;
+  const out: SideProfileMetrics = {};
+  let any = false;
+  for (const key of allowed) {
+    const val = obj[key];
+    if (val === undefined) continue;
+    if (typeof val === "number" && Number.isFinite(val) && val >= 0 && val <= 180) {
+      out[key] = val;
+      any = true;
+    }
+  }
+  return any ? out : undefined;
 }
 
 function stringField(v: unknown): string {

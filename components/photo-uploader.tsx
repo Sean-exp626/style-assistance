@@ -26,6 +26,10 @@ import { useEffect, useId, useState } from "react";
 import { Camera, ImageIcon, X } from "lucide-react";
 
 import { FaceMeshOverlay } from "@/components/face-mesh-overlay";
+import type {
+  SideProfileLandmarks,
+  SideProfileMetrics,
+} from "@/lib/face-shape";
 import { cn } from "@/lib/utils";
 import { convertHeicToJpeg, isHeic } from "@/lib/heic";
 
@@ -52,6 +56,10 @@ interface PhotoUploaderProps {
   meshMode?: "face" | "profile" | "head";
   /** mesh 검출 결과(478개 트리플렛)를 부모에게 전달. head mode에서는 항상 null. */
   onLandmarks?: (lm: number[][] | null) => void;
+  /** 측면 sparse keypoint를 부모에게 전달. profile mode 외에는 항상 null. */
+  onSideLandmarks?: (v: SideProfileLandmarks | null) => void;
+  /** 측면 4각도 메트릭을 부모에게 전달. profile mode 외에는 항상 null. */
+  onSideMetrics?: (v: SideProfileMetrics | null) => void;
 }
 
 export function PhotoUploader({
@@ -63,6 +71,8 @@ export function PhotoUploader({
   withFaceMesh = false,
   meshMode = "face",
   onLandmarks,
+  onSideLandmarks,
+  onSideMetrics,
 }: PhotoUploaderProps) {
   const cameraInputId = useId();
   const galleryInputId = useId();
@@ -164,6 +174,8 @@ export function PhotoUploader({
             <FaceMeshOverlay
               source={previewUrl}
               onLandmarks={onLandmarks}
+              onSideLandmarks={onSideLandmarks}
+              onSideMetrics={onSideMetrics}
               variant="interactive"
               mode={meshMode}
               className="absolute inset-0 h-full w-full rounded-none border-0 bg-transparent"

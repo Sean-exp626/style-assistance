@@ -13,6 +13,10 @@
  */
 import type { FieldValue, Timestamp } from "firebase-admin/firestore";
 
+import type {
+  SideProfileLandmarks,
+  SideProfileMetrics,
+} from "@/lib/face-shape";
 import type { Gender, LengthPreference } from "@/lib/prompts";
 import type { ReferenceImage } from "@/lib/search";
 
@@ -32,6 +36,16 @@ export interface AnalysisResultDoc {
   };
   professional_analysis: string;
   search_keywords: string[];
+  /**
+   * 측면 프로파일 4각도 — 측면 사진이 제공된 경우에만 모델이 채울 수 있는 선택 필드.
+   * 단위는 도(°), 0~180 범위. 모든 자연어 필드에는 숫자/도 표기 없음.
+   */
+  head_shape_metrics?: {
+    nasofrontal_angle?: number;
+    mentolabial_angle?: number;
+    facial_convexity?: number;
+    jaw_angle?: number;
+  };
 }
 
 /** 사진 view 라벨 (한국어 — 사람이 읽기 좋도록 한국어로 저장) */
@@ -65,6 +79,19 @@ export interface HairAnalysisDoc {
    * - 사후 분류기/시각화 재현용 — 분석 직후뿐 아니라 history 모달에서도 재사용
    */
   frontLandmarks?: number[][];
+  /**
+   * 측면 사진의 sparse keypoint(최대 7개) — yaw 분류 + 원좌표 [x,y,z].
+   *
+   * - 클라이언트에서 검출 성공시에만 동봉
+   * - 좌/우 mirror normalization 없음 — 사후 통계용 원좌표 그대로 저장
+   * - UI에는 노출하지 않는다 (백엔드/Firestore only)
+   */
+  sideLandmarks?: SideProfileLandmarks;
+  /**
+   * 측면 4각도 메트릭 (도 단위, 0~180). 검출 성공시에만 동봉.
+   * 일부 필드만 채워질 수 있다(예: ear_front 미검출 시 jaw_angle 없음).
+   */
+  sideMetrics?: SideProfileMetrics;
 }
 
 /**
