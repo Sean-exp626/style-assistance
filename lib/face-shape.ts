@@ -132,24 +132,16 @@ export function extractSideProfileLandmarks(
   if (!eyeL || !eyeR) return null;
   const dx = eyeR.x - eyeL.x;
 
-  // ear 후보: in-frame인 쪽을 사용. 둘 다 in-frame이면 "yaw 반대편" 귀를 선택
+  // ear 선택 — 한쪽만 in-frame이면 그쪽이 "보이는 귀". 둘 다 in-frame이면 거의
+  // 정면이라 ear 자체를 신뢰할 수 없으므로 omit (아래 ratio 체크에서 어차피 reject).
   const earL = rawLm[EAR_LEFT];
   const earR = rawLm[EAR_RIGHT];
   const earLIn = earL ? inFrame(earL) : false;
   const earRIn = earR ? inFrame(earR) : false;
 
   let earChoice: NormalizedLandmark | undefined;
-  // dx > 0 → yaw "left" → 보이는 귀는 ear_right
-  // dx < 0 → yaw "right" → 보이는 귀는 ear_left
-  if (earLIn && earRIn) {
-    earChoice = dx > 0 ? earR : earL;
-  } else if (earLIn) {
-    earChoice = earL;
-  } else if (earRIn) {
-    earChoice = earR;
-  } else {
-    earChoice = undefined;
-  }
+  if (earLIn && !earRIn) earChoice = earL;
+  else if (earRIn && !earLIn) earChoice = earR;
   if (earChoice) candidates.ear_front = earChoice;
 
   // out-of-frame 카운트
@@ -179,10 +171,22 @@ export function extractSideProfileLandmarks(
   const faceWidth = maxX - minX;
   if (!Number.isFinite(faceWidth) || faceWidth <= 1e-6) return null;
 
+  // 정면 vs 측면 구별:
+  //   정면일수록 두 외안각이 image-x 축에서 크게 벌어진다 (ratio 큼, 0.30~0.45).
+  //   측면일수록 한 눈이 다른 눈을 가려 image-x 좌표가 겹치며 ratio가 0에 가까워진다.
+  //   따라서 ratio가 너무 크면 거의 정면이므로 reject.
   const ratio = Math.abs(dx) / faceWidth;
-  if (ratio < 0.18) return null; // near-frontal — 측면이 아님
+  if (ratio > 0.32) return null; // 거의 정면 — 측면이 아님
 
-  const yaw: "left" | "right" = dx > 0 ? "left" : "right";
+  // yaw 방향: 보이는 귀로 결정한다 (dx 부호는 가려진 눈을 mediapipe가 어디로
+  // 외삽하느냐에 따라 일관되지 않다). ear 정보가 모호하면 dx 부호로 폴백.
+  // 234(EAR_LEFT) = 피사체 우측 cheek/ear 근방, 454(EAR_RIGHT) = 좌측.
+  // 234만 in-frame → 머리를 (보는 사람 기준) 오른쪽으로 돌림 → yaw="right".
+  // 454만 in-frame → 왼쪽으로 돌림 → yaw="left".
+  let yaw: "left" | "right";
+  if (earLIn && !earRIn) yaw = "right";
+  else if (earRIn && !earLIn) yaw = "left";
+  else yaw = dx >= 0 ? "left" : "right";
 
   // keypoints 결과 — frame 안에 있는 것만 raw 좌표로 채운다
   const keypoints: SideProfileLandmarks["keypoints"] = {};
