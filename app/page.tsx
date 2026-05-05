@@ -31,11 +31,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-import {
-  classifyFaceShape,
-  type SideProfileLandmarks,
-  type SideProfileMetrics,
-} from "@/lib/face-shape";
+import { classifyFaceShape } from "@/lib/face-shape";
 import { convertHeicToJpeg } from "@/lib/heic";
 import { resizeImage } from "@/lib/image-utils";
 import type {
@@ -96,16 +92,6 @@ export default function Home() {
    * PhotoUploader 안의 FaceMeshOverlay에서 흘러 들어와 onSubmit이 폼에 동봉.
    */
   const [frontLandmarks, setFrontLandmarks] = useState<number[][] | null>(null);
-  /**
-   * 측면 사진의 sparse keypoint(최대 7개) + 4각도 메트릭.
-   * 검출 실패시 null. UI에는 노출하지 않고 onSubmit이 폼에 동봉.
-   */
-  const [sideLandmarks, setSideLandmarks] = useState<SideProfileLandmarks | null>(
-    null,
-  );
-  const [sideMetrics, setSideMetrics] = useState<SideProfileMetrics | null>(
-    null,
-  );
   /**
    * 분석 결과 패널의 mesh 재현용 ObjectURL.
    * - PhotoUploader가 만든 미리보기 URL은 file 변경 시점에 revoke되어 결과 패널에 살릴 수 없다.
@@ -201,12 +187,6 @@ export default function Home() {
         if (frontLandmarks) {
           formData.set("frontLandmarks", JSON.stringify(frontLandmarks));
         }
-        if (sideLandmarks) {
-          formData.set("sideLandmarks", JSON.stringify(sideLandmarks));
-        }
-        if (sideMetrics) {
-          formData.set("sideMetrics", JSON.stringify(sideMetrics));
-        }
 
         // 직전 URL revoke 후 새 URL 보관
         setFrontPreviewUrl((prev) => {
@@ -274,8 +254,6 @@ export default function Home() {
           hasAnyFile={hasAnyFile}
           onSubmit={onSubmit}
           onFrontLandmarks={setFrontLandmarks}
-          onSideLandmarks={setSideLandmarks}
-          onSideMetrics={setSideMetrics}
         />
       </div>
 
@@ -350,10 +328,6 @@ interface ConsultationCardProps {
   onSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
   /** 정면 슬롯의 mesh 검출 결과 콜백 — Home에서 setState를 그대로 흘린다. */
   onFrontLandmarks: (lm: number[][] | null) => void;
-  /** 측면 슬롯의 sparse keypoint 콜백 — Home에서 setState로 흘림. */
-  onSideLandmarks: (v: SideProfileLandmarks | null) => void;
-  /** 측면 슬롯의 4각도 메트릭 콜백. */
-  onSideMetrics: (v: SideProfileMetrics | null) => void;
 }
 
 function ConsultationCard({
@@ -367,8 +341,6 @@ function ConsultationCard({
   hasAnyFile,
   onSubmit,
   onFrontLandmarks,
-  onSideLandmarks,
-  onSideMetrics,
 }: ConsultationCardProps) {
   return (
     <section className="animate-in fade-in duration-700">
@@ -392,13 +364,12 @@ function ConsultationCard({
                   hint={VIEW_HINTS[view]}
                   file={files[view] ?? null}
                   onChange={(f) => onPickFile(view, f)}
-                  withFaceMesh
-                  meshMode={
-                    view === "back" ? "head" : view === "side" ? "profile" : "face"
-                  }
+                  // 측면은 업로드 카드에서 시각 분석을 노출하지 않는다 — Consultation
+                  // Result 패널의 Side Profile Detection 카드에서만 검출/표시.
+                  // 정면(face)/뒷면(head)은 기존 그대로 업로드 시점 시각 피드백 유지.
+                  withFaceMesh={view !== "side"}
+                  meshMode={view === "back" ? "head" : "face"}
                   onLandmarks={view === "front" ? onFrontLandmarks : undefined}
-                  onSideLandmarks={view === "side" ? onSideLandmarks : undefined}
-                  onSideMetrics={view === "side" ? onSideMetrics : undefined}
                 />
               ))}
             </div>
