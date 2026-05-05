@@ -10,8 +10,6 @@
 - **Phase 2 — 갤러리**: web_search + og:image 추출 + thum.io 폴백
 - **Phase 3 — 디자인 폴리싱**: Cormorant Garamond, 그라디언트 헤더, 펄스 애니메이션 등 KAI JUNG HAIR 다크 무드 완성
 
-상세 마이그레이션 플랜: [`../kaijunghair-migration-plan.md`](../kaijunghair-migration-plan.md)
-
 ## 기술 스택
 
 | 영역 | 선택 |
@@ -26,7 +24,7 @@
 ## 디렉토리 구조
 
 ```
-kaijunghair/
+style-assistance/
 ├── app/
 │   ├── api/analyze/route.ts   # POST 엔드포인트 (multipart/form-data)
 │   ├── globals.css            # KAI JUNG HAIR 다크 토큰 + shadcn 매핑
@@ -102,4 +100,3 @@ vercel --prod
 
 - 원본 Streamlit 코드: [`../hair-style-ai/`](../hair-style-ai/)
 - 원본 아키텍처 문서: [`../hair-style-ai/architecture.md`](../hair-style-ai/architecture.md)
-- 마이그레이션 플랜: [`../kaijunghair-migration-plan.md`](../kaijunghair-migration-plan.md)
