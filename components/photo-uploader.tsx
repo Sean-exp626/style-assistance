@@ -26,10 +26,6 @@ import { useEffect, useId, useState } from "react";
 import { Camera, ImageIcon, X } from "lucide-react";
 
 import { FaceMeshOverlay } from "@/components/face-mesh-overlay";
-import type {
-  SideProfileLandmarks,
-  SideProfileMetrics,
-} from "@/lib/face-shape";
 import { cn } from "@/lib/utils";
 import { convertHeicToJpeg, isHeic } from "@/lib/heic";
 
@@ -43,23 +39,22 @@ interface PhotoUploaderProps {
   hint?: string;
   className?: string;
   /**
-   * 미리보기 자리에 FaceMeshOverlay를 띄운다 (정면 슬롯 한정).
+   * 미리보기 자리에 FaceMeshOverlay를 띄운다 (정면/뒷면 슬롯).
    * mesh 카드도 label 클릭으로 파일 picker 트리거가 되도록 wrap.
+   * 측면(profile)은 V1에서 업로드 시점 시각화를 노출하지 않는다 — 결과 패널에서만.
    */
   withFaceMesh?: boolean;
   /**
    * mesh 동작 모드.
    *  - "face" (정면): mediapipe FaceLandmarker로 478점 검출 + contour 폴리곤
-   *  - "profile" (측면): mediapipe 시도 → 검출 실패 시 4-corner 브래킷 폴백
    *  - "head" (뒷면): mediapipe 우회, 시뮬레이션 두상 분석 시각만
+   *
+   * "profile"은 더 이상 업로드 단계에서 사용하지 않는다 (V1: Claude Vision 단일 소스).
+   * AnalysisPanel의 Side Profile Detection 카드에서만 mode="profile"이 등장.
    */
-  meshMode?: "face" | "profile" | "head";
+  meshMode?: "face" | "head";
   /** mesh 검출 결과(478개 트리플렛)를 부모에게 전달. head mode에서는 항상 null. */
   onLandmarks?: (lm: number[][] | null) => void;
-  /** 측면 sparse keypoint를 부모에게 전달. profile mode 외에는 항상 null. */
-  onSideLandmarks?: (v: SideProfileLandmarks | null) => void;
-  /** 측면 4각도 메트릭을 부모에게 전달. profile mode 외에는 항상 null. */
-  onSideMetrics?: (v: SideProfileMetrics | null) => void;
 }
 
 export function PhotoUploader({
@@ -71,8 +66,6 @@ export function PhotoUploader({
   withFaceMesh = false,
   meshMode = "face",
   onLandmarks,
-  onSideLandmarks,
-  onSideMetrics,
 }: PhotoUploaderProps) {
   const cameraInputId = useId();
   const galleryInputId = useId();
@@ -174,8 +167,6 @@ export function PhotoUploader({
             <FaceMeshOverlay
               source={previewUrl}
               onLandmarks={onLandmarks}
-              onSideLandmarks={onSideLandmarks}
-              onSideMetrics={onSideMetrics}
               variant="interactive"
               mode={meshMode}
               className="absolute inset-0 h-full w-full rounded-none border-0 bg-transparent"

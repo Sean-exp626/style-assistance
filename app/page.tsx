@@ -613,13 +613,14 @@ function AnalysisPanel({
                 Side Profile Detection
               </span>
               <span className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">
-                sparse keypoints · MediaPipe
+                sparse keypoints · Claude Vision
               </span>
             </div>
             <FaceMeshOverlay
               source={sidePreviewUrl}
               variant="readonly"
               mode="profile"
+              serverKeypoints={result.side_keypoints ?? null}
             />
           </CardContent>
         </Card>

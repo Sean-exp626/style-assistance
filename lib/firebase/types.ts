@@ -46,6 +46,21 @@ export interface AnalysisResultDoc {
     facial_convexity?: number;
     jaw_angle?: number;
   };
+  /**
+   * 측면 키포인트 (V1: Claude Vision 단일 소스).
+   * - 원본 사진 기준 정규화 [0,1] 좌표 (x: 좌→우, y: 상→하).
+   * - 모델이 3개 이상 자신 있게 짚으면 객체, 그 외엔 `null`.
+   * - 부분 객체 OK (모든 키 optional) — UI는 ≥3개 정의된 키일 때만 overlay 표시.
+   */
+  side_keypoints?: {
+    forehead?: { x: number; y: number };
+    nose_bridge?: { x: number; y: number };
+    nose_tip?: { x: number; y: number };
+    philtrum?: { x: number; y: number };
+    lower_lip?: { x: number; y: number };
+    chin?: { x: number; y: number };
+    ear_front?: { x: number; y: number };
+  } | null;
 }
 
 /** 사진 view 라벨 (한국어 — 사람이 읽기 좋도록 한국어로 저장) */

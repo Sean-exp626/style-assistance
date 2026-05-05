@@ -3,11 +3,14 @@
 /**
  * FaceMeshOverlay — 사진 위 분석 시각화 오버레이.
  *
- * 두 가지 모드:
- *  - mode="face" (default, 정면/측면): MediaPipe FaceLandmarker로 얼굴 메쉬 검출
+ * 세 가지 모드:
+ *  - mode="face" (default, 정면): MediaPipe FaceLandmarker로 얼굴 메쉬 검출
  *    - 478 landmarks tessellation을 토큰 색상으로 그림
  *    - 결과를 `onLandmarks`로 전달
- *    - 측면(profile) 사진은 검출 신뢰도가 낮을 수 있음 — no-face로 떨어져도 정상 흐름
+ *  - mode="profile" (측면): **MediaPipe 호출 없음.** Claude Vision이 단일 소스.
+ *    - 부모로부터 `serverKeypoints`(Claude 응답의 `side_keypoints`)를 받아 그린다.
+ *    - 정의된 키포인트가 ≥3개면 sparse polyline + cross + jaw line + triangle 시각화
+ *    - <3개거나 null이면 "NO PROFILE DETECTED" 배지 + 빈 캔버스 (합성 폴백 없음)
  *  - mode="head" (뒷면): mediapipe 호출 없이 시뮬레이션된 두상 분석 시각 피드백
  *    - 약 2.2초 간 스캔 라인 → 4-corner 브래킷 + "Profile Mapped" 배지
  *    - landmarks는 항상 null
@@ -29,19 +32,27 @@
  */
 import { useEffect, useId, useRef, useState } from "react";
 
-import {
-  computeSideProfileMetrics,
-  extractSideProfileLandmarks,
-  type SideProfileLandmarks,
-  type SideProfileMetrics,
-} from "@/lib/face-shape";
 import { cn } from "@/lib/utils";
+import type { SideKeypoints } from "@/lib/prompts";
 
 import type {
   FaceLandmarker as FaceLandmarkerType,
   FaceLandmarkerResult,
   NormalizedLandmark,
 } from "@mediapipe/tasks-vision";
+
+/** V1 측면 키포인트 7개 이름. SYSTEM_PROMPT/Claude 응답과 1:1. */
+type SideKeypointName =
+  | "forehead"
+  | "nose_bridge"
+  | "nose_tip"
+  | "philtrum"
+  | "lower_lip"
+  | "chin"
+  | "ear_front";
+
+/** profile 모드에서 부모가 내려주는 서버 측 키포인트 — 정규화 [0,1] 좌표 */
+type ServerKeypoints = NonNullable<SideKeypoints> | null | undefined;
 
 /* --------------------------- 모듈-레벨 싱글톤 --------------------------- */
 
@@ -121,10 +132,10 @@ type State =
   | { kind: "idle" }
   | { kind: "loading-model" }
   | { kind: "analyzing" }
-  | { kind: "ok"; faces: number }                       // face mode 성공 (실제 landmarks)
-  | { kind: "profile-detected"; pointCount: number }    // profile mode 검출 성공
-  | { kind: "profile-estimated" }                       // profile mode 폴백 (synth overlay)
-  | { kind: "head-mapped" }                             // head mode 성공
+  | { kind: "ok"; faces: number }                          // face mode 성공 (실제 landmarks)
+  | { kind: "profile-detected"; pointCount: number }       // profile mode 검출 성공 (Claude ≥3)
+  | { kind: "profile-no-detection" }                       // profile mode: Claude null/<3
+  | { kind: "head-mapped" }                                // head mode 성공
   | { kind: "no-face" }
   | { kind: "multi-face"; count: number }
   | { kind: "error"; message: string };
@@ -133,12 +144,12 @@ interface FaceMeshOverlayProps {
   source: string | null;
   onLandmarks?: (lm: number[][] | null) => void;
   /**
-   * 측면 모드 검출 성공시 sparse landmarks를 부모로 전달.
-   * 검출 실패(estimated 폴백)일 때는 `null`로 호출.
+   * profile 모드 단일 소스 — Claude Vision이 반환한 7개 측면 키포인트.
+   * - `null` 또는 정의된 키 < 3개 → "NO PROFILE DETECTED" 상태로 폴백
+   * - 정의된 키 ≥ 3개 → sparse overlay 렌더
+   * - 각 좌표는 원본 사진 기준 정규화 [0,1] (x: 좌→우, y: 상→하)
    */
-  onSideLandmarks?: (v: SideProfileLandmarks | null) => void;
-  /** 측면 4각도 메트릭. 검출 실패시 `null`. */
-  onSideMetrics?: (v: SideProfileMetrics | null) => void;
+  serverKeypoints?: ServerKeypoints;
   variant?: Variant;
   mode?: Mode;
   className?: string;
@@ -151,8 +162,7 @@ const ENABLED = process.env.NEXT_PUBLIC_ENABLE_FACE_MESH !== "false";
 export function FaceMeshOverlay({
   source,
   onLandmarks,
-  onSideLandmarks,
-  onSideMetrics,
+  serverKeypoints,
   variant = "interactive",
   mode = "face",
   className,
@@ -168,11 +178,10 @@ export function FaceMeshOverlay({
     let cancelled = false;
     let resizeObserver: ResizeObserver | null = null;
     let headTimer: ReturnType<typeof setTimeout> | null = null;
+    let profileAnalyzingTimer: ReturnType<typeof setTimeout> | null = null;
 
     if (!source || !ENABLED) {
       onLandmarks?.(null);
-      onSideLandmarks?.(null);
-      onSideMetrics?.(null);
       return () => {
         cancelled = true;
         setState({ kind: "idle" });
@@ -212,29 +221,71 @@ export function FaceMeshOverlay({
       };
     }
 
-    /* ============= face/profile mode — mediapipe 검출 (통합 경로) =============
+    /* ============= profile mode (측면) — Claude Vision 단일 소스 =============
      *
-     * 측면 모드도 동일한 mediapipe 호출을 시도한다. 단,
-     *  - 검출 실패(model load fail / no-face / multi-face / OOF keypoint 다수)
-     *    인 경우 합성 overlay로 자연스럽게 폴백 (기존 사용자 경험 유지).
-     *  - 검출 성공시 sparse polyline + cross marker로 실제 좌표를 시각화하고,
-     *    부모로 SideProfileLandmarks/SideProfileMetrics를 흘려보낸다. */
-    /**
-     * 측면 모드 폴백으로 떨어지는 진입점. 합성 overlay를 그리고 부모에 null을 흘려준다.
-     * resize 시에도 합성 overlay가 다시 그려지도록 ResizeObserver를 붙인다.
+     * V1: MediaPipe 측면 검출은 사용하지 않는다 (478-mesh 모델은 strict 90° profile
+     * 입력에서 빈 결과를 자주 반환). 대신 부모 `serverKeypoints` prop으로 받은
+     * Claude 응답을 그대로 시각화한다.
+     *
+     *  - <3 정의된 키 OR null → "NO PROFILE DETECTED" 상태 (합성 오버레이 없음)
+     *  - ≥3 정의된 키 → drawProfileSparse(serverKeypoints) 로 시각화
      */
-    function enterProfileFallback() {
-      if (cancelled) return;
-      setState({ kind: "profile-estimated" });
-      onSideLandmarks?.(null);
-      onSideMetrics?.(null);
-      drawProfileFallback();
-      if (figureRef.current && typeof ResizeObserver !== "undefined") {
-        resizeObserver = new ResizeObserver(drawProfileFallback);
-        resizeObserver.observe(figureRef.current);
+    if (mode === "profile") {
+      onLandmarks?.(null);
+
+      async function runProfile() {
+        setState({ kind: "loading-model" });
+        const img = imgRef.current;
+        if (!img) {
+          setState({ kind: "error", message: "이미지 요소 없음" });
+          return;
+        }
+        try {
+          await waitImageLoaded(img);
+        } catch {
+          if (cancelled) return;
+          setState({ kind: "error", message: "이미지 로드 실패" });
+          return;
+        }
+        if (cancelled) return;
+
+        // face mode와의 시각적 연속성을 위해 짧은 analyzing 페이즈
+        setState({ kind: "analyzing" });
+        profileAnalyzingTimer = setTimeout(() => {
+          if (cancelled) return;
+
+          const kp = serverKeypoints ?? null;
+          const definedCount = kp ? countDefinedKeypoints(kp) : 0;
+
+          if (!kp || definedCount < 3) {
+            setState({ kind: "profile-no-detection" });
+            clearCanvas();
+            return;
+          }
+
+          setState({ kind: "profile-detected", pointCount: definedCount });
+
+          const drawSide = () => {
+            if (cancelled) return;
+            drawProfileSparse(kp);
+          };
+          drawSide();
+          if (figureRef.current && typeof ResizeObserver !== "undefined") {
+            resizeObserver = new ResizeObserver(drawSide);
+            resizeObserver.observe(figureRef.current);
+          }
+        }, 250);
       }
+      void runProfile();
+
+      return () => {
+        cancelled = true;
+        if (profileAnalyzingTimer) clearTimeout(profileAnalyzingTimer);
+        if (resizeObserver) resizeObserver.disconnect();
+      };
     }
 
+    /* ============= face mode (정면) — MediaPipe 478점 mesh ============= */
     async function run() {
       setState({ kind: "loading-model" });
 
@@ -246,10 +297,6 @@ export function FaceMeshOverlay({
       } catch (err) {
         if (cancelled) return;
         console.warn("[face-mesh] model load failed:", err);
-        if (mode === "profile") {
-          enterProfileFallback();
-          return;
-        }
         setState({ kind: "error", message: "검출 모델 실패" });
         onLandmarks?.(null);
         return;
@@ -258,10 +305,6 @@ export function FaceMeshOverlay({
 
       const img = imgRef.current;
       if (!img) {
-        if (mode === "profile") {
-          enterProfileFallback();
-          return;
-        }
         setState({ kind: "error", message: "이미지 요소 없음" });
         return;
       }
@@ -270,10 +313,6 @@ export function FaceMeshOverlay({
       } catch (err) {
         if (cancelled) return;
         console.warn("[face-mesh] image load failed:", err);
-        if (mode === "profile") {
-          enterProfileFallback();
-          return;
-        }
         setState({ kind: "error", message: "이미지 로드 실패" });
         onLandmarks?.(null);
         return;
@@ -288,10 +327,6 @@ export function FaceMeshOverlay({
       } catch (err) {
         if (cancelled) return;
         console.warn("[face-mesh] detect failed:", err);
-        if (mode === "profile") {
-          enterProfileFallback();
-          return;
-        }
         setState({ kind: "error", message: "검출 실패" });
         onLandmarks?.(null);
         return;
@@ -300,20 +335,12 @@ export function FaceMeshOverlay({
 
       const faces = detection.faceLandmarks ?? [];
       if (faces.length === 0) {
-        if (mode === "profile") {
-          enterProfileFallback();
-          return;
-        }
         setState({ kind: "no-face" });
         onLandmarks?.(null);
         clearCanvas();
         return;
       }
       if (faces.length > 1) {
-        if (mode === "profile") {
-          enterProfileFallback();
-          return;
-        }
         setState({ kind: "multi-face", count: faces.length });
         onLandmarks?.(null);
         clearCanvas();
@@ -322,32 +349,7 @@ export function FaceMeshOverlay({
 
       const primary = faces[0];
 
-      // ============ 측면 모드: sparse keypoint 추출 시도 ============
-      if (mode === "profile") {
-        const slm = extractSideProfileLandmarks(primary);
-        if (!slm) {
-          enterProfileFallback();
-          return;
-        }
-        const metrics = computeSideProfileMetrics(slm);
-        onSideLandmarks?.(slm);
-        onSideMetrics?.(metrics);
-        const pointCount = Object.keys(slm.keypoints).length;
-        setState({ kind: "profile-detected", pointCount });
-
-        const drawSide = () => {
-          if (cancelled) return;
-          drawProfileSparse(primary, slm);
-        };
-        drawSide();
-        if (figureRef.current && typeof ResizeObserver !== "undefined") {
-          resizeObserver = new ResizeObserver(drawSide);
-          resizeObserver.observe(figureRef.current);
-        }
-        return;
-      }
-
-      // ============ 정면 모드: 478점 mesh 시각화 ============
+      // 478점 mesh 시각화
       const triplets = primary.map((p) => [p.x, p.y, p.z]);
       onLandmarks?.(triplets);
       setState({ kind: "ok", faces: 1 });
@@ -369,131 +371,6 @@ export function FaceMeshOverlay({
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-    }
-
-    /**
-     * profile mode 폴백 — landmarks 없이 figure 박스 비례로 합성 overlay 그리기.
-     * 좌측 facing(코가 왼쪽으로 돌출) 가정. 우측 facing이어도 시각적으로 어색하지 않도록
-     * 좌우 대칭성을 일부 유지.
-     */
-    function drawProfileFallback() {
-      const canvas = canvasRef.current;
-      const figure = figureRef.current;
-      if (!canvas || !figure) return;
-      const cssRect = figure.getBoundingClientRect();
-      const dpr = Math.max(1, window.devicePixelRatio || 1);
-      canvas.width = Math.round(cssRect.width * dpr);
-      canvas.height = Math.round(cssRect.height * dpr);
-      canvas.style.width = `${cssRect.width}px`;
-      canvas.style.height = `${cssRect.height}px`;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-      const W = cssRect.width;
-      const H = cssRect.height;
-      const isMobile =
-        typeof window !== "undefined" &&
-        window.matchMedia("(max-width: 640px)").matches;
-
-      const cyan = readCssVar("--color-tc-accent-hi") || "#2BA8AB";
-      const white = readCssVar("--color-tc-text") || "#ECEEED";
-      const red = readCssVar("--color-tc-danger") || "#E26D6D";
-      const green = "#7DDB7A";
-
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-
-      // 1) 흰 dashed — 세로 중심선 + 수평 레벨 라인 (이마/눈/코/입/턱)
-      ctx.setLineDash([4, 4]);
-      ctx.strokeStyle = withAlpha(white, 0.45);
-      ctx.lineWidth = isMobile ? 0.6 : 0.8;
-      // 세로
-      ctx.beginPath();
-      ctx.moveTo(W * 0.5, H * 0.12);
-      ctx.lineTo(W * 0.5, H * 0.92);
-      ctx.stroke();
-      // 수평 레벨 5개
-      const levels = [0.22, 0.36, 0.52, 0.68, 0.85];
-      for (const lv of levels) {
-        ctx.beginPath();
-        ctx.moveTo(W * 0.18, H * lv);
-        ctx.lineTo(W * 0.82, H * lv);
-        ctx.stroke();
-      }
-      ctx.setLineDash([]);
-
-      // 2) 흰 윤곽 — 측면 silhouette 근사 (좌측 facing 가정)
-      ctx.strokeStyle = white;
-      ctx.lineWidth = isMobile ? 0.9 : 1.1;
-      ctx.beginPath();
-      ctx.moveTo(W * 0.55, H * 0.12); // 정수리
-      ctx.bezierCurveTo(W * 0.42, H * 0.13, W * 0.32, H * 0.25, W * 0.30, H * 0.40); // 이마-코 위
-      ctx.bezierCurveTo(W * 0.26, H * 0.46, W * 0.26, H * 0.54, W * 0.32, H * 0.58); // 코끝 돌출
-      ctx.bezierCurveTo(W * 0.34, H * 0.62, W * 0.34, H * 0.68, W * 0.40, H * 0.72); // 인중-입
-      ctx.bezierCurveTo(W * 0.42, H * 0.78, W * 0.45, H * 0.85, W * 0.55, H * 0.90); // 턱
-      ctx.stroke();
-
-      // 3) 빨간 분석 삼각형 (이마-코끝-턱) + 빨간 점
-      const tri = [
-        { x: W * 0.50, y: H * 0.20 }, // 이마
-        { x: W * 0.30, y: H * 0.52 }, // 코끝
-        { x: W * 0.50, y: H * 0.88 }, // 턱
-      ];
-      ctx.strokeStyle = withAlpha(red, 0.8);
-      ctx.lineWidth = isMobile ? 1 : 1.3;
-      ctx.beginPath();
-      ctx.moveTo(tri[0].x, tri[0].y);
-      ctx.lineTo(tri[1].x, tri[1].y);
-      ctx.lineTo(tri[2].x, tri[2].y);
-      ctx.closePath();
-      ctx.stroke();
-
-      ctx.fillStyle = red;
-      ctx.shadowColor = red;
-      ctx.shadowBlur = isMobile ? 3 : 5;
-      const redDotR = isMobile ? 2.5 : 3.5;
-      for (const p of tri) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, redDotR, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.shadowBlur = 0;
-
-      // 4) 초록 jaw angle 라인 (귀-턱)
-      ctx.strokeStyle = green;
-      ctx.lineWidth = isMobile ? 1.4 : 1.8;
-      ctx.shadowColor = green;
-      ctx.shadowBlur = isMobile ? 3 : 4;
-      ctx.beginPath();
-      ctx.moveTo(W * 0.62, H * 0.55); // 귀 부근
-      ctx.lineTo(W * 0.50, H * 0.88); // 턱 끝
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-
-      // 5) 청록 cross 마커 — 정수리/이마/코끝/입/턱
-      // shadowBlur는 estimated 폴백임을 시각적으로 한 단계 약하게 표현 (mobile 3, desktop 4)
-      ctx.strokeStyle = cyan;
-      ctx.lineWidth = isMobile ? 1.5 : 1.8;
-      ctx.shadowColor = cyan;
-      ctx.shadowBlur = isMobile ? 3 : 4;
-      const crossSize = isMobile ? 4 : 5.5;
-      const crosses = [
-        { x: W * 0.50, y: H * 0.20 },
-        { x: W * 0.30, y: H * 0.52 },
-        { x: W * 0.40, y: H * 0.72 },
-        { x: W * 0.50, y: H * 0.88 },
-      ];
-      for (const p of crosses) {
-        ctx.beginPath();
-        ctx.moveTo(p.x - crossSize, p.y);
-        ctx.lineTo(p.x + crossSize, p.y);
-        ctx.moveTo(p.x, p.y - crossSize);
-        ctx.lineTo(p.x, p.y + crossSize);
-        ctx.stroke();
-      }
-      ctx.shadowBlur = 0;
     }
 
     function drawMesh(mp: MpModule, landmarks: NormalizedLandmark[]) {
@@ -647,18 +524,17 @@ export function FaceMeshOverlay({
     }
 
     /**
-     * 측면 sparse overlay — 검출 성공시 7개 keypoint를 polyline + cross로 시각화.
+     * 측면 sparse overlay — Claude Vision이 반환한 7개 keypoint를 polyline + cross로 시각화.
      *
-     * 레이어 구성 (drawMesh와 같은 projection 헬퍼 사용):
+     * V1 입력: `ServerKeypoints` (정규화 [0,1] 좌표). MediaPipe 인덱스를 사용하지 않는다.
+     *
+     * 레이어 구성:
      *  1) 청록 polyline (forehead → nose_bridge → nose_tip → philtrum → lower_lip → chin)
      *  2) 초록 jaw line (ear_front → chin) — ear_front 누락시 생략 + chin glow boost
      *  3) 빨간 분석 삼각형 (forehead → nose_tip → chin) + 빨간 점
-     *  4) 청록 cross 마커 (in-frame인 모든 keypoint)
+     *  4) 청록 cross 마커 (정의된 모든 keypoint)
      */
-    function drawProfileSparse(
-      landmarks: NormalizedLandmark[],
-      slm: SideProfileLandmarks,
-    ) {
+    function drawProfileSparse(kp: NonNullable<SideKeypoints>) {
       const canvas = canvasRef.current;
       const figure = figureRef.current;
       const img = imgRef.current;
@@ -691,30 +567,29 @@ export function FaceMeshOverlay({
         y: offsetY + p.y * renderH,
       });
 
-      // MediaPipe 인덱스 매핑 — face-shape.ts와 동일
-      const NOSE_TIP = 1;
-      const NOSE_BRIDGE = 6;
-      const FOREHEAD = 10;
-      const PHILTRUM = 0;
-      const LOWER_LIP = 17;
-      const CHIN = 152;
+      // V2 hybrid 대비: [x,y,z] 튜플도 들어올 수 있도록 양쪽 형태 모두 지원.
+      const readXY = (
+        v: { x: number; y: number } | [number, number, number] | undefined,
+      ): { x: number; y: number } | undefined => {
+        if (!v) return undefined;
+        if (Array.isArray(v)) return { x: v[0], y: v[1] };
+        return { x: v.x, y: v.y };
+      };
 
-      // slm.keypoints에 어떤 이름이 있는지 = "in-frame인 keypoint"
-      const has = (name: keyof SideProfileLandmarks["keypoints"]) =>
-        slm.keypoints[name] !== undefined;
+      const projectName = (name: SideKeypointName) => {
+        const xy = readXY(kp[name]);
+        return xy ? project(xy) : null;
+      };
 
       const proj = {
-        forehead: has("forehead") ? project(landmarks[FOREHEAD]) : null,
-        nose_bridge: has("nose_bridge") ? project(landmarks[NOSE_BRIDGE]) : null,
-        nose_tip: has("nose_tip") ? project(landmarks[NOSE_TIP]) : null,
-        philtrum: has("philtrum") ? project(landmarks[PHILTRUM]) : null,
-        lower_lip: has("lower_lip") ? project(landmarks[LOWER_LIP]) : null,
-        chin: has("chin") ? project(landmarks[CHIN]) : null,
+        forehead: projectName("forehead"),
+        nose_bridge: projectName("nose_bridge"),
+        nose_tip: projectName("nose_tip"),
+        philtrum: projectName("philtrum"),
+        lower_lip: projectName("lower_lip"),
+        chin: projectName("chin"),
       } as const;
-
-      // ear_front: slm.keypoints.ear_front의 raw [x,y]를 그대로 project
-      const earKp = slm.keypoints.ear_front;
-      const earProj = earKp ? project({ x: earKp[0], y: earKp[1] }) : null;
+      const earProj = projectName("ear_front");
 
       const isMobile =
         typeof window !== "undefined" &&
@@ -828,18 +703,17 @@ export function FaceMeshOverlay({
       cancelled = true;
       if (resizeObserver) resizeObserver.disconnect();
     };
-    // onLandmarks identity는 부모 setState로 안정 — dep 제외
+    // onLandmarks identity는 부모 setState로 안정 — dep 제외.
+    // serverKeypoints는 부모 result 문서 단위로만 바뀌어 inline 객체 ref 안정.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, mode]);
+  }, [source, mode, serverKeypoints]);
 
   const meshVisible =
-    state.kind === "ok" ||
-    state.kind === "profile-detected" ||
-    state.kind === "profile-estimated";
+    state.kind === "ok" || state.kind === "profile-detected";
   const headBracketsVisible = state.kind === "head-mapped";
   const scanVisible =
     state.kind === "loading-model" || state.kind === "analyzing";
-  const showEstimatedDescription = state.kind === "profile-estimated";
+  const showNoDetectionDescription = state.kind === "profile-no-detection";
 
   const altLabel =
     mode === "head" ? "뒷면 두상" : mode === "face" ? "얼굴" : "사진";
@@ -848,7 +722,7 @@ export function FaceMeshOverlay({
     <figure
       ref={figureRef}
       aria-labelledby={figureId}
-      aria-describedby={showEstimatedDescription ? descId : undefined}
+      aria-describedby={showNoDetectionDescription ? descId : undefined}
       className={cn(
         "relative aspect-[16/11] overflow-hidden rounded-xl border border-border/80 bg-[color:var(--color-tc-surface)]",
         className,
@@ -891,9 +765,9 @@ export function FaceMeshOverlay({
           : `얼굴 메쉬 오버레이 (${variant === "readonly" ? "읽기 전용" : "분석"})`}
       </span>
 
-      {showEstimatedDescription ? (
+      {showNoDetectionDescription ? (
         <span id={descId} className="sr-only">
-          측면 각도가 부드러워 합성 가이드로 표시됩니다. 분석 결과는 정상적으로 진행됩니다.
+          측면 프로파일을 자동으로 인식하지 못했습니다. 분석 결과는 정상적으로 진행됩니다.
         </span>
       ) : null}
 
@@ -987,19 +861,14 @@ function StatusBadge({ state, mode }: { state: State; mode: Mode }) {
       </span>
     );
   }
-  if (state.kind === "profile-estimated") {
+  if (state.kind === "profile-no-detection") {
     return (
       <span
         role="status"
         aria-live="polite"
-        className={cn(base, "text-[color:var(--color-tc-text-soft)]")}
+        className={cn(base, "text-[color:var(--color-tc-text-muted)]")}
       >
-        <span
-          aria-hidden
-          className="inline-block h-[9px] w-[9px] rounded-[1px] border border-dashed border-current"
-          style={{ marginRight: "6px" }}
-        />
-        PROFILE · ESTIMATED
+        NO PROFILE DETECTED
       </span>
     );
   }
@@ -1076,6 +945,26 @@ function withAlpha(color: string, alpha: number): string {
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
   return color;
+}
+
+/**
+ * `serverKeypoints`에서 정의된(=undefined 아님) 키 수를 센다.
+ * V1 임계: ≥3이면 detected, 미만이면 no-detection.
+ */
+function countDefinedKeypoints(kp: NonNullable<SideKeypoints>): number {
+  let n = 0;
+  for (const name of [
+    "forehead",
+    "nose_bridge",
+    "nose_tip",
+    "philtrum",
+    "lower_lip",
+    "chin",
+    "ear_front",
+  ] as const satisfies readonly SideKeypointName[]) {
+    if (kp[name] !== undefined) n += 1;
+  }
+  return n;
 }
 
 function waitImageLoaded(img: HTMLImageElement): Promise<void> {

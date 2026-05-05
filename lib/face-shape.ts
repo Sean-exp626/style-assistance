@@ -17,6 +17,11 @@
  *  - 10:  이마 정점, 152: 턱 끝         → face_length
  *  - 172: 왼쪽 턱,   397: 오른쪽 턱     → jaw_width
  *  - 103: 왼쪽 헤어라인, 332: 오른쪽 헤어라인 → forehead_width
+ *
+ * V1: 측면 클라이언트 추출 경로(extractSideProfileLandmarks/computeSideProfileMetrics)는
+ *     호출되지 않는다. Side Profile은 서버측 Claude Vision (`AnalysisResult.side_keypoints`)이
+ *     단일 소스. 본 모듈의 측면 함수/타입은 V2 hybrid (MediaPipe-first + Claude fallback)
+ *     도입 시 재활용을 위해 유지한다.
  */
 import type { NormalizedLandmark } from "@mediapipe/tasks-vision";
 

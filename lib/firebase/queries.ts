@@ -137,13 +137,29 @@ function toRecord(doc: FirestoreDocLike): HairAnalysisRecord {
     providedViews: Array.isArray(data.providedViews)
       ? (data.providedViews as ProvidedView[])
       : [],
-    result: (data.result as AnalysisResultDoc) ?? {
-      face_shape: "",
-      head_shape: "",
-      recommended_style: { name: "", length: "", key_features: [] },
-      professional_analysis: "",
-      search_keywords: [],
-    },
+    result: ((): AnalysisResultDoc => {
+      const raw = data.result;
+      // legacy doc 안전망 — result 필드 자체가 없으면 빈 골격 반환
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+        return {
+          face_shape: "",
+          head_shape: "",
+          recommended_style: { name: "", length: "", key_features: [] },
+          professional_analysis: "",
+          search_keywords: [],
+        };
+      }
+      // V1 추가 필드 side_keypoints 방어적 파싱: 형식이 깨졌어도 history UI를 깨뜨리지 않는다.
+      const base = raw as AnalysisResultDoc & Record<string, unknown>;
+      const sideKp = parseSideKeypointsField(base.side_keypoints);
+      // Firestore에 저장된 실제 키만 보존 — undefined면 결과 객체에서 키 자체를 빼준다.
+      if (sideKp === undefined) {
+        const { side_keypoints: _omit, ...rest } = base;
+        void _omit;
+        return rest as AnalysisResultDoc;
+      }
+      return { ...base, side_keypoints: sideKp };
+    })(),
     references: Array.isArray(data.references)
       ? (data.references as ReferenceImage[])
       : [],
@@ -179,6 +195,60 @@ function parseSideLandmarksField(v: unknown): SideProfileLandmarks | undefined {
     out[k as keyof SideProfileLandmarks["keypoints"]] = val as [number, number, number];
   }
   return { yaw, keypoints: out };
+}
+
+/**
+ * Firestore `result.side_keypoints` 필드를 안전하게 복원한다.
+ *
+ * 반환 규약 (Firestore의 3-state 표현을 그대로 보존):
+ *   - 입력이 명시적 `null`     → `null`           (모델이 자신 없음)
+ *   - 입력이 undefined/형식깨짐 → `undefined`     (legacy doc 또는 손상 → 키 자체 제거)
+ *   - 입력이 정상 객체         → 7-key 화이트리스트 + [0,1] 검증한 부분 객체
+ *
+ * 살아남은 키가 0개면 `undefined`로 떨어뜨려 UI가 빈 객체를 처리하지 않게 한다.
+ */
+function parseSideKeypointsField(
+  v: unknown,
+):
+  | NonNullable<AnalysisResultDoc["side_keypoints"]>
+  | null
+  | undefined {
+  if (v === null) return null;
+  if (v === undefined || typeof v !== "object" || Array.isArray(v)) return undefined;
+
+  const allowed = [
+    "forehead",
+    "nose_bridge",
+    "nose_tip",
+    "philtrum",
+    "lower_lip",
+    "chin",
+    "ear_front",
+  ] as const;
+  const obj = v as Record<string, unknown>;
+  const out: NonNullable<AnalysisResultDoc["side_keypoints"]> = {};
+  let any = false;
+  for (const key of allowed) {
+    const val = obj[key];
+    if (!val || typeof val !== "object" || Array.isArray(val)) continue;
+    const xy = val as Record<string, unknown>;
+    const x = xy.x;
+    const y = xy.y;
+    if (
+      typeof x === "number" &&
+      typeof y === "number" &&
+      Number.isFinite(x) &&
+      Number.isFinite(y) &&
+      x >= 0 &&
+      x <= 1 &&
+      y >= 0 &&
+      y <= 1
+    ) {
+      out[key] = { x, y };
+      any = true;
+    }
+  }
+  return any ? out : undefined;
 }
 
 function parseSideMetricsField(v: unknown): SideProfileMetrics | undefined {
