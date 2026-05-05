@@ -621,6 +621,7 @@ function AnalysisPanel({
               variant="readonly"
               mode="profile"
               serverKeypoints={result.side_keypoints ?? null}
+              serverFaceBbox={result.face_bbox ?? null}
             />
           </CardContent>
         </Card>

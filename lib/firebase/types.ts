@@ -48,7 +48,7 @@ export interface AnalysisResultDoc {
   };
   /**
    * 측면 키포인트 (V1: Claude Vision 단일 소스).
-   * - 원본 사진 기준 정규화 [0,1] 좌표 (x: 좌→우, y: 상→하).
+   * - **bbox 내부 상대** [0,1] 좌표. 절대 정규화가 아니라 `face_bbox` 내부 비율.
    * - 모델이 3개 이상 자신 있게 짚으면 객체, 그 외엔 `null`.
    * - 부분 객체 OK (모든 키 optional) — UI는 ≥3개 정의된 키일 때만 overlay 표시.
    */
@@ -60,6 +60,17 @@ export interface AnalysisResultDoc {
     lower_lip?: { x: number; y: number };
     chin?: { x: number; y: number };
     ear_front?: { x: number; y: number };
+  } | null;
+  /**
+   * 얼굴 영역 axis-aligned bounding box — 원본 사진 기준 정규화 [0, 1].
+   * `side_keypoints`의 좌표는 이 bbox 내부 상대 좌표로 해석된다.
+   * 측면 사진이 없거나 모델이 자신 없으면 `null`.
+   */
+  face_bbox?: {
+    x_min: number;
+    y_min: number;
+    x_max: number;
+    y_max: number;
   } | null;
 }
 

@@ -33,7 +33,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 
 import { cn } from "@/lib/utils";
-import type { SideKeypoints } from "@/lib/prompts";
+import type { FaceBbox, SideKeypoints } from "@/lib/prompts";
 
 import type {
   FaceLandmarker as FaceLandmarkerType,
@@ -51,8 +51,10 @@ type SideKeypointName =
   | "chin"
   | "ear_front";
 
-/** profile 모드에서 부모가 내려주는 서버 측 키포인트 — 정규화 [0,1] 좌표 */
+/** profile 모드에서 부모가 내려주는 서버 측 키포인트 — bbox 내부 [0,1] 상대 좌표 */
 type ServerKeypoints = NonNullable<SideKeypoints> | null | undefined;
+/** 얼굴 영역 bounding box (원본 사진 기준 [0,1] 정규화). null 이면 전체 이미지로 fallback. */
+type ServerFaceBbox = NonNullable<FaceBbox> | null | undefined;
 
 /* --------------------------- 모듈-레벨 싱글톤 --------------------------- */
 
@@ -150,6 +152,12 @@ interface FaceMeshOverlayProps {
    * - 각 좌표는 원본 사진 기준 정규화 [0,1] (x: 좌→우, y: 상→하)
    */
   serverKeypoints?: ServerKeypoints;
+  /**
+   * profile 모드 — Claude Vision이 반환한 얼굴 axis-aligned bbox.
+   * `serverKeypoints`의 좌표는 이 bbox 내부 상대 [0,1]. bbox 가 null/undefined 이면
+   * 좌표를 원본 이미지 전체 [0,1] 로 해석 (backward compat).
+   */
+  serverFaceBbox?: ServerFaceBbox;
   variant?: Variant;
   mode?: Mode;
   className?: string;
@@ -163,6 +171,7 @@ export function FaceMeshOverlay({
   source,
   onLandmarks,
   serverKeypoints,
+  serverFaceBbox,
   variant = "interactive",
   mode = "face",
   className,
@@ -265,9 +274,10 @@ export function FaceMeshOverlay({
 
           setState({ kind: "profile-detected", pointCount: definedCount });
 
+          const bbox = serverFaceBbox ?? null;
           const drawSide = () => {
             if (cancelled) return;
-            drawProfileSparse(kp);
+            drawProfileSparse(kp, bbox);
           };
           drawSide();
           if (figureRef.current && typeof ResizeObserver !== "undefined") {
@@ -534,7 +544,10 @@ export function FaceMeshOverlay({
      *  3) 빨간 분석 삼각형 (forehead → nose_tip → chin) + 빨간 점
      *  4) 청록 cross 마커 (정의된 모든 keypoint)
      */
-    function drawProfileSparse(kp: NonNullable<SideKeypoints>) {
+    function drawProfileSparse(
+      kp: NonNullable<SideKeypoints>,
+      bbox: NonNullable<FaceBbox> | null,
+    ) {
       const canvas = canvasRef.current;
       const figure = figureRef.current;
       const img = imgRef.current;
@@ -562,11 +575,6 @@ export function FaceMeshOverlay({
       const offsetX = (boxW - renderW) / 2;
       const offsetY = (boxH - renderH) / 2;
 
-      const project = (p: { x: number; y: number }) => ({
-        x: offsetX + p.x * renderW,
-        y: offsetY + p.y * renderH,
-      });
-
       // V2 hybrid 대비: [x,y,z] 튜플도 들어올 수 있도록 양쪽 형태 모두 지원.
       const readXY = (
         v: { x: number; y: number } | [number, number, number] | undefined,
@@ -574,6 +582,32 @@ export function FaceMeshOverlay({
         if (!v) return undefined;
         if (Array.isArray(v)) return { x: v[0], y: v[1] };
         return { x: v.x, y: v.y };
+      };
+
+      // bbox 가 유효하면 keypoint(bbox-relative) → 이미지 정규화 좌표로 합성.
+      // bbox 없으면 keypoint 를 이미지 정규화로 그대로 해석 (backward compat).
+      const bboxValid =
+        !!bbox &&
+        Number.isFinite(bbox.x_min) &&
+        Number.isFinite(bbox.y_min) &&
+        Number.isFinite(bbox.x_max) &&
+        Number.isFinite(bbox.y_max) &&
+        bbox.x_max > bbox.x_min &&
+        bbox.y_max > bbox.y_min;
+      const bboxW = bboxValid ? bbox!.x_max - bbox!.x_min : 1;
+      const bboxH = bboxValid ? bbox!.y_max - bbox!.y_min : 1;
+      const bboxX = bboxValid ? bbox!.x_min : 0;
+      const bboxY = bboxValid ? bbox!.y_min : 0;
+      const toImageNorm = (p: { x: number; y: number }) => ({
+        x: bboxX + p.x * bboxW,
+        y: bboxY + p.y * bboxH,
+      });
+      const project = (p: { x: number; y: number }) => {
+        const img = toImageNorm(p);
+        return {
+          x: offsetX + img.x * renderW,
+          y: offsetY + img.y * renderH,
+        };
       };
 
       const projectName = (name: SideKeypointName) => {
@@ -704,9 +738,9 @@ export function FaceMeshOverlay({
       if (resizeObserver) resizeObserver.disconnect();
     };
     // onLandmarks identity는 부모 setState로 안정 — dep 제외.
-    // serverKeypoints는 부모 result 문서 단위로만 바뀌어 inline 객체 ref 안정.
+    // serverKeypoints/serverFaceBbox는 부모 result 문서 단위로만 바뀌어 inline 객체 ref 안정.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [source, mode, serverKeypoints]);
+  }, [source, mode, serverKeypoints, serverFaceBbox]);
 
   const meshVisible =
     state.kind === "ok" || state.kind === "profile-detected";

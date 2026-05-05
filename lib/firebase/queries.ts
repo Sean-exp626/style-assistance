@@ -149,16 +149,22 @@ function toRecord(doc: FirestoreDocLike): HairAnalysisRecord {
           search_keywords: [],
         };
       }
-      // V1 추가 필드 side_keypoints 방어적 파싱: 형식이 깨졌어도 history UI를 깨뜨리지 않는다.
+      // V1 추가 필드 side_keypoints / face_bbox 방어적 파싱: 형식이 깨졌어도 history UI를 깨뜨리지 않는다.
       const base = raw as AnalysisResultDoc & Record<string, unknown>;
       const sideKp = parseSideKeypointsField(base.side_keypoints);
+      const faceBbox = parseFaceBboxField(base.face_bbox);
       // Firestore에 저장된 실제 키만 보존 — undefined면 결과 객체에서 키 자체를 빼준다.
-      if (sideKp === undefined) {
-        const { side_keypoints: _omit, ...rest } = base;
-        void _omit;
-        return rest as AnalysisResultDoc;
-      }
-      return { ...base, side_keypoints: sideKp };
+      const {
+        side_keypoints: _omitKp,
+        face_bbox: _omitBbox,
+        ...rest
+      } = base;
+      void _omitKp;
+      void _omitBbox;
+      const out = rest as AnalysisResultDoc;
+      if (sideKp !== undefined) out.side_keypoints = sideKp;
+      if (faceBbox !== undefined) out.face_bbox = faceBbox;
+      return out;
     })(),
     references: Array.isArray(data.references)
       ? (data.references as ReferenceImage[])
@@ -249,6 +255,42 @@ function parseSideKeypointsField(
     }
   }
   return any ? out : undefined;
+}
+
+/**
+ * Firestore `result.face_bbox` 필드를 안전하게 복원한다.
+ * - null  → null  (모델이 자신 없음을 명시)
+ * - 형식 깨짐/누락 → undefined (legacy doc 또는 손상)
+ * - 정상  → {x_min, y_min, x_max, y_max} 모두 finite + x_max>x_min + y_max>y_min
+ */
+function parseFaceBboxField(
+  v: unknown,
+):
+  | { x_min: number; y_min: number; x_max: number; y_max: number }
+  | null
+  | undefined {
+  if (v === null) return null;
+  if (v === undefined || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const obj = v as Record<string, unknown>;
+  const xMin = obj.x_min;
+  const yMin = obj.y_min;
+  const xMax = obj.x_max;
+  const yMax = obj.y_max;
+  if (
+    typeof xMin !== "number" ||
+    typeof yMin !== "number" ||
+    typeof xMax !== "number" ||
+    typeof yMax !== "number" ||
+    !Number.isFinite(xMin) ||
+    !Number.isFinite(yMin) ||
+    !Number.isFinite(xMax) ||
+    !Number.isFinite(yMax) ||
+    xMax <= xMin ||
+    yMax <= yMin
+  ) {
+    return undefined;
+  }
+  return { x_min: xMin, y_min: yMin, x_max: xMax, y_max: yMax };
 }
 
 function parseSideMetricsField(v: unknown): SideProfileMetrics | undefined {
